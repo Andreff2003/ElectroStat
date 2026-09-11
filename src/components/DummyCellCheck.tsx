@@ -3,7 +3,7 @@ import { Beaker } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { InfoHint } from "@/components/InfoHint";
+import { InfoHint, Hint } from "@/components/InfoHint";
 import { formatParamValue } from "@/utils/eisFit";
 import { evaluateDummyCell, type DummyCellCheckResult, type DummyCellVerdict } from "@/utils/dummyCellCheck";
 
@@ -101,13 +101,15 @@ export function DummyCellCheck({ measured }: Props) {
                 {r.label} {formatParamValue(r.label, r.measured, r.unit)}
                 <span className="text-muted-foreground"> / {formatParamValue(r.label, r.expected, r.unit)}</span>
               </span>
-              <span className={`text-xs font-mono ${VERDICT_COLOR[r.verdict]}`}>
-                {Number.isFinite(r.errorPct) ? `${r.errorPct >= 0 ? "+" : ""}${r.errorPct.toFixed(1)}%` : "—"}
-              </span>
+              <Hint text="Deviation from the known value. Within ±10% green (OK), within ±25% yellow (warning), beyond that red (fail).">
+                <span className={`text-xs font-mono cursor-help ${VERDICT_COLOR[r.verdict]}`}>
+                  {Number.isFinite(r.errorPct) ? `${r.errorPct >= 0 ? "+" : ""}${r.errorPct.toFixed(1)}%` : "—"}
+                </span>
+              </Hint>
             </div>
           ))}
           <div className="text-xs font-mono">
-            Verdict: <span className={`uppercase ${VERDICT_COLOR[result.overall]}`}>{VERDICT_LABEL[result.overall]}</span>
+            Verdict<InfoHint text="The worst verdict among Rs, Rct and Cdl above — one FAIL is enough to fail the whole check." />: <span className={`uppercase ${VERDICT_COLOR[result.overall]}`}>{VERDICT_LABEL[result.overall]}</span>
           </div>
         </div>
       )}

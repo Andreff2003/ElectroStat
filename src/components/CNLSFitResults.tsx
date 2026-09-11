@@ -3,7 +3,7 @@ import { formatParamValue, getCircuitLabel } from "@/utils/eisFit";
 import type { RandlesFitResult, WarburgResult, KKResult } from "@/utils/randlesFit";
 import type { LinKKResult } from "@/utils/linKK";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { InfoHint } from "@/components/InfoHint";
+import { InfoHint, Hint } from "@/components/InfoHint";
 
 /** Short explanations for the circuit parameters shown in the fit panel. */
 export const PARAM_HINTS: Record<string, string> = {
@@ -131,9 +131,11 @@ const CNLSFitResults = ({ fit, model, randlesFit, warburg, kk, linKK }: Props) =
                   {formatParamValue(name, v, u)}
                 </span>
               </div>
-              <span className={`text-xs font-mono ${errClass}`}>
-                {fmtErr(errPct)}
-              </span>
+              <Hint text="Approximate local standard error of this parameter, from the log-space covariance matrix. <5% green, <20% neutral, ≥20% red — a high value means the fit doesn't pin this parameter down well.">
+                <span className={`text-xs font-mono cursor-help ${errClass}`}>
+                  {fmtErr(errPct)}
+                </span>
+              </Hint>
             </div>
           );
         })}
@@ -148,8 +150,10 @@ const CNLSFitResults = ({ fit, model, randlesFit, warburg, kk, linKK }: Props) =
             </div>
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-xs text-xs font-mono">
-            Reduced χ² from the weighted fit. Near 1 = good fit; much higher =
-            poor fit or wrong circuit.
+            Modulus-weighted SSR per degree of freedom — a relative indicator,
+            not a classical statistical goodness-of-fit. &lt;0.001 green
+            (excellent), &lt;0.01 neutral (acceptable), otherwise red (poor
+            fit or wrong circuit).
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -191,7 +195,10 @@ const CNLSFitResults = ({ fit, model, randlesFit, warburg, kk, linKK }: Props) =
       {/* Fit error % */}
       {Number.isFinite(fitErrorPct ?? NaN) && (
         <div className="flex items-center justify-between text-xs font-mono">
-          <span className="text-muted-foreground">Fit error</span>
+          <span className="text-muted-foreground">
+            Fit error
+            <InfoHint text="sqrt(weighted SSR/dof) × 100, an RMSE-like percentage. <2% excellent (green), <8% good (neutral), ≥8% poor (red)." />
+          </span>
           <span className={fitErrColor(fitErrorPct!)}>{fitErrorPct!.toFixed(2)} %</span>
         </div>
       )}

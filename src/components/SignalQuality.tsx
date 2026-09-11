@@ -550,30 +550,30 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
       <div className="space-y-0">
         {mode === "eis" && (
           <>
-            <MetricRow label="Semicircle Fit" title="How closely the points trace a smooth semicircle. Low values suggest noise or a badly placed separator." value={ready ? `${eisMetrics.semicircleFit.toFixed(1)} %` : pending} level={eisMetrics.semicircleLevel} />
-            <MetricRow label="Residual Noise" title="Deviation from a smooth curve, as % of signal size. Lower is better." value={ready ? `${eisMetrics.pointNoise.toFixed(2)} %` : pending} level={eisMetrics.noiseLevel} />
+            <MetricRow label="Semicircle Fit" title="How closely the points trace a smooth semicircle. ≥95% green, 85–95% yellow, below that red. Low values suggest noise or a badly placed separator." value={ready ? `${eisMetrics.semicircleFit.toFixed(1)} %` : pending} level={eisMetrics.semicircleLevel} />
+            <MetricRow label="Residual Noise" title="Deviation from a smooth curve, as % of signal size. ≤3% green, 3–8% yellow, above that red." value={ready ? `${eisMetrics.pointNoise.toFixed(2)} %` : pending} level={eisMetrics.noiseLevel} />
             <MetricRow
               label="Lin-KK (RMS res.)"
-              title="Lin-KK consistency: fit to a sum of M parallel RC elements. RMS residual ≤5% supports linear/causal/stable behavior in the measured range. Does NOT prove a specific equivalent circuit."
+              title="Lin-KK consistency: fit to a sum of M parallel RC elements. RMS residual ≤5% green, 5–10% yellow, above that red. Supports linear/causal/stable behavior in the measured range but does NOT prove a specific equivalent circuit."
               value={Number.isFinite(eisMetrics.linKKPct) ? `${eisMetrics.linKKPct.toFixed(2)} %` : "—"}
               level={eisMetrics.linKKLevel}
             />
-            <MetricRow label="Rs (Ω)" title="Solution resistance, from the highest-frequency point. Should stay stable across repeat measurements." value={ready ? `${eisMetrics.rsStability.toFixed(0)} Ω` : pending} level={eisMetrics.rsLevel} />
-            <MetricRow label="Total Points" title="Number of frequency points in this sweep." value={`${eisMetrics.totalPoints}`} level={eisMetrics.pointsLevel} />
+            <MetricRow label="Rs (Ω)" title="Solution resistance, from the highest-frequency point. Typically 50–2000 Ω green, up to 5000 Ω yellow, outside that red. Should stay stable across repeat measurements." value={ready ? `${eisMetrics.rsStability.toFixed(0)} Ω` : pending} level={eisMetrics.rsLevel} />
+            <MetricRow label="Total Points" title="Number of frequency points in this sweep — more points make the fit more reliable. ≥30 green, 15–29 yellow, fewer than 15 red." value={`${eisMetrics.totalPoints}`} level={eisMetrics.pointsLevel} />
 
           </>
         )}
         {mode === "fet" && (
           <>
-            <MetricRow label="Ion / Ioff Ratio" title="On/off current ratio — higher means a cleaner switching response, independent of analyte binding." value={ready ? fetMetrics.ionIoff.toFixed(1) : pending} level={fetMetrics.ionLevel} />
-            <MetricRow label="ΔVt" title="Threshold voltage shift between baseline and analyte curves — the main signal for analyte binding." value={deltaVtStr} level={deltaVtLevel} />
+            <MetricRow label="Ion / Ioff Ratio" title="On/off current ratio — higher means a cleaner switching response, independent of analyte binding. >100 green, >20 yellow, below that red." value={ready ? fetMetrics.ionIoff.toFixed(1) : pending} level={fetMetrics.ionLevel} />
+            <MetricRow label="ΔVt" title="Threshold voltage shift between baseline and analyte curves — the main signal for analyte binding, not an electrode-quality metric. >50 mV green, >10 mV yellow, smaller shifts red." value={deltaVtStr} level={deltaVtLevel} />
             <MetricRow
               label="Subthreshold Slope"
-              title="How sharply current turns on with gate voltage. Lower = sharper response. Approximate (quadratic fit)."
+              title="How sharply current turns on with gate voltage. Lower = sharper response. <200 mV/dec green, <400 mV/dec yellow, above that red. Approximate (quadratic fit)."
               value={ready ? (fetMetrics.subthresholdSlope > 0 ? `${fetMetrics.subthresholdSlope.toFixed(0)} mV/dec` : "—") : pending}
               level={fetMetrics.ssLevel}
             />
-            <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
+            <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
 
             <MetricRow label="Baseline Noise" title="100·std/|mean| over the deep-off (low Vg) region of the baseline. <5% green, <15% yellow, else red." value={ready ? `${fetMetrics.baselineStability.toFixed(1)} %` : pending} level={fetMetrics.stabilityLevel} />
             {fetMetrics.negativeCurrentWarning && (
@@ -585,18 +585,18 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         )}
         {mode === "cv" && (
           <>
-            <MetricRow label="Reversibility" title="Classifies the redox couple by peak separation and current ratio: reversible, quasi-reversible, or irreversible." value={cvMetrics ? cvMetrics.reversibility : pending} level={cvLevels.reversibilityLevel} />
+            <MetricRow label="Reversibility" title="Classifies the redox couple by peak separation and current ratio. Reversible = green, quasi-reversible = yellow, irreversible = red." value={cvMetrics ? cvMetrics.reversibility : pending} level={cvLevels.reversibilityLevel} />
             <MetricRow
               label={`ΔEp (exp. ${(59.16 / Math.max(1, cvNElectrons)).toFixed(0)} mV)`}
-              title={`Expected ΔEp = 59.16 / n at 25 °C for n=${cvNElectrons}`}
+              title={`Expected ΔEp = 59.16 / n at 25 °C for n=${cvNElectrons}. Green within the configured tolerance of that value (default ±20 mV), yellow within 3× the tolerance, red beyond that.`}
               value={cvMetrics && Number.isFinite(cvMetrics.deltaEp) ? `${cvMetrics.deltaEp.toFixed(0)} mV` : "—"}
               level={cvLevels.deltaEpLevel}
             />
-            <MetricRow label="|Ipa/Ipc|" title="Anodic/cathodic peak current ratio. Near 1.0 = reversible couple." value={cvMetrics && Number.isFinite(cvMetrics.IpaIpcRatio) ? cvMetrics.IpaIpcRatio.toFixed(2) : "—"} level={cvLevels.ratioLevel} />
-            <MetricRow label="Peaks Detected" title="Oxidation/reduction peaks found, out of 2 expected." value={cvMetrics ? `${(cvMetrics.hasAnodic ? 1 : 0) + (cvMetrics.hasCathodic ? 1 : 0)} / 2` : pending} level={cvLevels.peakLevel} />
+            <MetricRow label="|Ipa/Ipc|" title="Anodic/cathodic peak current ratio. Near 1.0 = reversible couple. 0.9–1.1 green, 0.7–1.3 yellow, outside that red." value={cvMetrics && Number.isFinite(cvMetrics.IpaIpcRatio) ? cvMetrics.IpaIpcRatio.toFixed(2) : "—"} level={cvLevels.ratioLevel} />
+            <MetricRow label="Peaks Detected" title="Oxidation/reduction peaks found, out of 2 expected. Both found = green, one = yellow, none = red." value={cvMetrics ? `${(cvMetrics.hasAnodic ? 1 : 0) + (cvMetrics.hasCathodic ? 1 : 0)} / 2` : pending} level={cvLevels.peakLevel} />
             <MetricRow
               label="SNR (min)"
-              title="min(SNR_anodic, SNR_cathodic) — corrected peak current ÷ noise estimate"
+              title="min(SNR_anodic, SNR_cathodic) — corrected peak current ÷ noise estimate. ≥10 green, ≥3 yellow, below that red."
               value={cvMetrics ? `${Math.min(cvMetrics.SNR_anodic, cvMetrics.SNR_cathodic).toFixed(1)}` : pending}
               level={cvLevels.snrLevel}
             />
@@ -614,29 +614,31 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
           <>
             <MetricRow
               label="Peak detected"
+              title="Whether a signed extremum clearing the minimum SNR and amplitude thresholds was found. Green requires a peak with SNR ≥10, yellow a peak with lower/unknown SNR, red no peak at all."
               value={ready ? (swvQuality.peakDetected ? "Yes" : "No") : pending}
               level={swvQuality.peakLevel}
             />
             <MetricRow
               label="SNR"
-              title="Peak current (corrected) ÷ RMS noise from non-peak region."
+              title="Peak current (corrected) ÷ RMS noise from non-peak region. ≥10 green, ≥3 yellow, below that red."
               value={swvQuality.snr != null ? swvQuality.snr.toFixed(2) : ready ? "—" : pending}
               level={swvQuality.snrLevel}
             />
             <MetricRow
               label="Half-peak width"
-              title="Expected SWV peak width depends on amplitude, electron number and kinetics."
+              title="Expected SWV peak width depends on amplitude, electron number and kinetics. 25–250 mV green, 15–350 mV yellow, outside that red."
               value={swvQuality.halfPeakWidth != null ? `${swvQuality.halfPeakWidth.toFixed(0)} mV` : ready ? "—" : pending}
               level={swvQuality.widthLevel}
             />
             <MetricRow
               label="Points"
+              title="Number of samples in this sweep — more points make peak/noise estimates more reliable. ≥50 green, 20–49 yellow, fewer than 20 red."
               value={`${swvQuality.totalPoints}`}
               level={swvQuality.pointsLevel}
             />
             <MetricRow
               label="Baseline stability"
-              title="RMS noise as % of |peak corrected current|. <10% green, <30% yellow."
+              title="RMS noise as % of |peak corrected current|. <10% green, <30% yellow, above that red."
               value={swvQuality.relNoise != null ? `${(swvQuality.relNoise * 100).toFixed(1)} % of peak` : ready ? "—" : pending}
               level={swvQuality.baselineLevel}
             />
