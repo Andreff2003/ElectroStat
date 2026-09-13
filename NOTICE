@@ -1,0 +1,30 @@
+Third-Party Notices
+====================
+
+This project targets hardware and reuses driver code originally published by
+the Linnes Lab (Weldon School of Biomedical Engineering, Purdue University)
+as part of the HELPStat project:
+
+  Bautista, K. A.; Madsen, E.; Riegle, S. D.; Linnes, J. C.
+  "HELPStat: A Handheld, EIS-Enabled, Low-Cost, and Portable Potentiostat."
+  ACS Electrochemistry, 2025. DOI: 10.1021/acselectrochem.4c00052
+  Repository: https://github.com/LinnesLab/HELPStat
+  License: MIT (Copyright (c) 2024 Linnes Lab)
+
+When the ElectroStat firmware is added to this repository, the following
+files are adapted from HELPStat's AD5941 driver and firmware and must keep
+their original HELPStat/Analog Devices copyright headers unmodified,
+alongside this project's own MIT license for the surrounding firmware code:
+
+  - ad5940.c
+  - ad5940.h
+  - HELPStat.cpp
+  - HELPStat.h
+  - Impedance.c
+  - Impedance.h
+
+No physical or electrical modification was made to the HELPStat hardware
+design. ElectroStat reuses the original board and driver as-is, adding WiFi
+and USB-serial communication, microSD backup logging, and new
+measurement/analysis capabilities on top of it, in the ESP32-S3 firmware,
+the Python bridge, and this web application.
