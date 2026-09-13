@@ -4,6 +4,9 @@ ElectroStat is a web dashboard and measurement pipeline for electrochemical
 sensing (EIS, cyclic voltammetry, square-wave voltammetry, and a BioFET
 mode), built on top of the open-source HELPStat handheld potentiostat.
 
+**Live demo:** https://electrostat.lovable.app (simulated-data mode, no
+installation needed).
+
 ## Architecture
 
 The system is split into three layers:
