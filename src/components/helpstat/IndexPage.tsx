@@ -1713,6 +1713,13 @@ const Index = () => {
         toast.info(`Demo: running ${step.label}…`);
         await step.run();
       }
+      // Each phase's steps were just auto-captured into that mode's overlay
+      // comparison view (see the demoRunning branch in each sweep-complete
+      // handler) — switch the corresponding overlay toggle on so it's
+      // visible immediately instead of requiring a manual click.
+      if (phase === "eis") setOverlayMode(true);
+      else if (phase === "cv") setCvOverlayMode(true);
+      else if (phase === "fet") setFetOverlayMode(true);
       const idx = PHASE_ORDER.indexOf(phase);
       const next: DemoPhase = idx + 1 < PHASE_ORDER.length ? PHASE_ORDER[idx + 1] : "done";
       setDemoPhase(next);
@@ -3088,6 +3095,9 @@ const Index = () => {
 
             <DashboardCell title="EIS — Nyquist" status={mapStatus(eisStatus)} onOpen={() => setMode("eis")}>
               <NyquistPlot data={eisData} overlays={[]} compact />
+            </DashboardCell>
+            <DashboardCell title="EIS — Bode" status={mapStatus(eisStatus)} onOpen={() => setMode("eis")}>
+              <BodePlot data={eisData} overlays={[]} />
             </DashboardCell>
             <DashboardCell title="CV — I vs E" status={cvStatus} onOpen={() => setMode("cv")}>
               <CVPlot
