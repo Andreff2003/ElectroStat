@@ -3097,7 +3097,7 @@ const Index = () => {
               <NyquistPlot data={eisData} overlays={[]} compact />
             </DashboardCell>
             <DashboardCell title="EIS — Bode" status={mapStatus(eisStatus)} onOpen={() => setMode("eis")}>
-              <BodePlot data={eisData} overlays={[]} />
+              <BodePlot data={eisData} overlays={[]} compact />
             </DashboardCell>
             <DashboardCell title="CV — I vs E" status={cvStatus} onOpen={() => setMode("cv")}>
               <CVPlot

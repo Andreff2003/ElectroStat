@@ -9,15 +9,18 @@ import type { EISDataPoint } from "@/hooks/useSimulatedData";
 interface BodePlotProps {
   data: EISDataPoint[];
   overlays?: { label: string; color: string; data: EISDataPoint[] }[];
+
+  /** Compact read-only rendering for the dashboard grid. */
+  compact?: boolean;
 }
 
-const BodePlot = ({ data, overlays }: BodePlotProps) => {
+const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
   const plotData = data.map(d => ({
     freq: d.frequency,
     zMag: d.zMag,
     phase: d.phase,
   }));
-  const ovs = (overlays ?? []).map((o) => ({
+  const ovs = compact ? [] : (overlays ?? []).map((o) => ({
     ...o,
     data: o.data.map((d) => ({ freq: d.frequency, zMag: d.zMag, phase: d.phase })),
   }));
@@ -59,7 +62,7 @@ const BodePlot = ({ data, overlays }: BodePlotProps) => {
 
   return (
     <div className="w-full h-full" style={{ position: "relative" }}>
-      {zoomDomain && (
+      {!compact && zoomDomain && (
         <button
           onClick={() => setZoomDomain(null)}
           style={{
@@ -77,10 +80,10 @@ const BodePlot = ({ data, overlays }: BodePlotProps) => {
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={plotData}
-          margin={{ top: 10, right: 30, bottom: 40, left: 20 }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
+          margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 10, right: 30, bottom: 40, left: 20 }}
+          onMouseDown={compact ? undefined : handleMouseDown}
+          onMouseMove={compact ? undefined : handleMouseMove}
+          onMouseUp={compact ? undefined : handleMouseUp}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(220 15% 15%)" />
           <XAxis
@@ -89,26 +92,26 @@ const BodePlot = ({ data, overlays }: BodePlotProps) => {
             scale="log"
             domain={zoomDomain ? zoomDomain.x : ['auto', 'auto']}
             allowDataOverflow
-            label={{ value: "Frequency (Hz)", position: "bottom", offset: 20, fill: "hsl(215 15% 50%)", fontSize: 12 }}
-            tick={{ fill: "hsl(215 15% 50%)", fontSize: 10 }}
+            label={compact ? undefined : { value: "Frequency (Hz)", position: "bottom", offset: 20, fill: "hsl(215 15% 50%)", fontSize: 12 }}
+            tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 10 }}
             stroke="hsl(220 15% 20%)"
-            interval={9}
+            interval={compact ? undefined : 9}
           />
           <YAxis
             yAxisId="left"
             scale="log"
             domain={['auto', 'auto']}
             allowDataOverflow
-            label={{ value: "|Z| (Ω)", angle: -90, position: "insideLeft", offset: -5, fill: "hsl(160 70% 50%)", fontSize: 12 }}
-            tick={{ fill: "hsl(215 15% 50%)", fontSize: 11 }}
+            label={compact ? undefined : { value: "|Z| (Ω)", angle: -90, position: "insideLeft", offset: -5, fill: "hsl(160 70% 50%)", fontSize: 12 }}
+            tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 11 }}
             stroke="hsl(220 15% 20%)"
           />
           <YAxis
             yAxisId="right"
             orientation="right"
             domain={["auto", "auto"]}
-            label={{ value: "Phase (°)", angle: 90, position: "insideRight", offset: -5, fill: "hsl(35 90% 55%)", fontSize: 12 }}
-            tick={{ fill: "hsl(215 15% 50%)", fontSize: 11 }}
+            label={compact ? undefined : { value: "Phase (°)", angle: 90, position: "insideRight", offset: -5, fill: "hsl(35 90% 55%)", fontSize: 12 }}
+            tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 11 }}
             stroke="hsl(220 15% 20%)"
           />
           <Tooltip
@@ -121,14 +124,16 @@ const BodePlot = ({ data, overlays }: BodePlotProps) => {
               fontSize: 12,
             }}
           />
-          <Legend wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12 }} />
-          <ReferenceLine
-            yAxisId="right"
-            y={-45}
-            stroke="hsl(35 90% 55%)"
-            strokeDasharray="4 4"
-            label={{ value: "-45° (ω = 1/RctCdl)", fill: "hsl(35 90% 55%)", fontSize: 10, position: "insideTopRight" }}
-          />
+          {!compact && <Legend wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12 }} />}
+          {!compact && (
+            <ReferenceLine
+              yAxisId="right"
+              y={-45}
+              stroke="hsl(35 90% 55%)"
+              strokeDasharray="4 4"
+              label={{ value: "-45° (ω = 1/RctCdl)", fill: "hsl(35 90% 55%)", fontSize: 10, position: "insideTopRight" }}
+            />
+          )}
           <Line yAxisId="left" type="monotone" dataKey="zMag" name="|Z| (Ω)" stroke="hsl(160 70% 50%)" strokeWidth={2} dot={false} isAnimationActive={false} />
           <Line yAxisId="right" type="monotone" dataKey="phase" name="Phase (°)" stroke="hsl(35 90% 55%)" strokeWidth={2} dot={false} isAnimationActive={false} />
           {ovs.map((o, i) => [
@@ -160,7 +165,7 @@ const BodePlot = ({ data, overlays }: BodePlotProps) => {
               isAnimationActive={false}
             />,
           ])}
-          {isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
+          {!compact && isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
             <ReferenceArea yAxisId="left" x1={zoomArea.x1} x2={zoomArea.x2} strokeOpacity={0.3} fill="hsl(160 70% 55%)" fillOpacity={0.15} />
           )}
         </LineChart>
