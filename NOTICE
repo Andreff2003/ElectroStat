@@ -11,20 +11,42 @@ as part of the HELPStat project:
   Repository: https://github.com/LinnesLab/HELPStat
   License: MIT (Copyright (c) 2024 Linnes Lab)
 
-When the ElectroStat firmware is added to this repository, the following
-files are adapted from HELPStat's AD5941 driver and firmware and must keep
-their original HELPStat/Analog Devices copyright headers unmodified,
-alongside this project's own MIT license for the surrounding firmware code:
+The firmware in [firmware/](firmware) is vendored from HELPStat largely
+unmodified, plus new ElectroStat code built on top of it. These files carry
+three different licenses, kept exactly as found in HELPStat's own
+repository — do not strip or alter any of the headers below:
 
-  - ad5940.c
-  - ad5940.h
-  - HELPStat.cpp
-  - HELPStat.h
-  - Impedance.c
-  - Impedance.h
+  - firmware/ad5940.c, firmware/ad5940.h, firmware/Impedance.c,
+    firmware/Impedance.h — Analog Devices' own AD5940 driver/impedance
+    library. Copyright (c) 2017-2019 Analog Devices, Inc. All Rights
+    Reserved. "This software is proprietary to Analog Devices, Inc. and
+    its licensors. By using this software you agree to the terms of the
+    associated Analog Devices Software License Agreement." NOT MIT — this
+    is Analog Devices' own vendor SDK code, redistributed here exactly as
+    HELPStat's own public repository already does.
+  - firmware/HELPStat.cpp, firmware/HELPStat.h — MIT License, Copyright (c)
+    2024 Linnes Lab, Purdue University (full text embedded in each file's
+    header).
+  - firmware/ad594x.cpp — Linnes Lab's own AD5940 Arduino-layer extension,
+    part of the same HELPStat library; carries no explicit license header
+    of its own, treated here as covered by HELPStat's MIT license like the
+    rest of that library.
+  - firmware/lma.cpp, firmware/lma.h — a Levenberg-Marquardt fitting
+    routine the HELPStat authors adapted from a modified Eigen port
+    (github.com/LinnesLab/Eigen-Port, itself building on
+    github.com/bolderflight/eigen) and from two third-party examples
+    (github.com/SarvagyaVaish/Eigen-Levenberg-Marquardt-Optimization and
+    github.com/daviddoria/Examples), per the credits in the file header.
+    None of these upstream sources carry an explicit license statement in
+    what HELPStat vendored, so this file's licensing is unclear; ElectroStat
+    does not call it (it lived in the original HELPStat CV/EIS fitting
+    path, which this project replaced with its own fitting code in
+    src/utils/randlesFit.ts and src/utils/eisFit.ts).
+  - firmware/ElectroStat_Firmware.ino, firmware/constants.h — new
+    ElectroStat code, MIT-licensed under this repository's own LICENSE.
 
 No physical or electrical modification was made to the HELPStat hardware
-design. ElectroStat reuses the original board and driver as-is, adding WiFi
-and USB-serial communication, microSD backup logging, and new
+design. ElectroStat reuses the original board and driver as-is, adding WiFi,
+USB-serial and manual RTIA gain selection, microSD backup logging, and new
 measurement/analysis capabilities on top of it, in the ESP32-S3 firmware,
-the Python bridge, and this web application.
+the Python bridge ([bridge.py](bridge.py)), and this web application.

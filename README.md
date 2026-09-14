@@ -11,10 +11,14 @@ installation needed).
 
 The system is split into three layers:
 
-1. **Firmware** (ESP32-S3 + AD5941) — runs on the HELPStat hardware, drives
-   the AD5941 potentiostat IC and streams measurement data over WiFi or USB
-   serial. Not yet included in this repository; see [NOTICE](NOTICE) for the
-   HELPStat-derived driver files it will contain and their license.
+1. **Firmware** ([firmware/](firmware), ESP32-S3 + AD5941) — runs on the
+   HELPStat hardware, drives the AD5941 potentiostat IC and streams
+   measurement data over WiFi or USB serial. Flash
+   `firmware/ElectroStat_Firmware.ino` with the Arduino IDE ("ESP32S3 Dev
+   Module" board, ArduinoJson v7 library). UNTESTED against real hardware —
+   see [firmware/README.md](firmware/README.md) for the current status per
+   technique. See [NOTICE](NOTICE) for the different licenses the vendored
+   driver files carry.
 2. **Bridge** ([bridge.py](bridge.py)) — a Python WebSocket server that
    relays data between the firmware (or a built-in simulator) and the web
    app.
@@ -43,11 +47,19 @@ for that reason, that dependency is the likely cause.
 
 ```bash
 pip install websockets
-python bridge.py --mode simulated --port 8765
+python bridge.py --mode simulated
 ```
 
-Use `--mode wifi --esp-url ws://<esp32-ip>/ws` instead of `--mode simulated`
-to connect to real HELPStat hardware rather than the built-in simulator.
+The browser connects to the bridge at `ws://127.0.0.1:81`. Other modes:
+
+```bash
+python bridge.py --mode wifi --esp-ip 192.168.4.1   # real hardware over WiFi
+python bridge.py --mode serial --port COM3          # real hardware over USB
+python bridge.py --mode dados_reais --pasta "./dados_eis"  # replay EIS from Excel files
+```
+
+`--mode serial` additionally needs `pip install pyserial`, and
+`--mode dados_reais` needs `pip install openpyxl`.
 
 ## License
 
