@@ -23,9 +23,9 @@
       the "ElectroStat addition" comments in HELPStat.h/.cpp).
       UNTESTED against real hardware — this is a first pass written
       against the library's own demo sketch and source, not verified
-      on a board. Known gap: AC excitation amplitude is fixed at the
-      library's hardcoded 200 mV peak-to-peak; the app's "Amplitude"
-      field is not wired through yet.
+      on a board. The app's "Amplitude" field (cmd["amplitude"], mV) is
+      now wired through to AD5940_TDD's sine generator (previously
+      fixed at the library's hardcoded 200 mV regardless of request).
     - CV: implemented as NEW code (there was no CV in the original
       HELPStat library to reuse), built on a new "amperometric step"
       primitive in HELPStat.h/.cpp — see the ElectroStat addition
@@ -250,11 +250,13 @@ void handleStartEis(JsonDocument &cmd) {
   // Vzero reference) — convert here, once, so nobody has to remember it.
   float dcBiasVolts = cmd["dcBias"] | 0.0f;
   float biasMillivolts = dcBiasVolts * 1000.0f;
-  // "amplitude" (cmd["amplitude"], mV) is accepted from the app but not
-  // yet wired to the driver — see the file header. Read it anyway so a
-  // future patch to AD5940_TDD's hardcoded sineVpp has a value ready.
   float amplitudeMv = cmd["amplitude"] | 10.0f;
-  (void)amplitudeMv;
+  if (amplitudeMv <= 0 || amplitudeMv > 800.0f) {
+    Serial.printf("[EIS] WARNING: requested amplitude %.1f mV is outside the "
+                  "~0-800 mV peak-to-peak range AD5940_TDD's sine generator "
+                  "supports (SinAmplitudeWord = amplitudeMv/800*2047) — the "
+                  "excitation will clip or invert.\n", amplitudeMv);
+  }
 
   if (freqMin <= 0 || freqMax <= 0 || freqMin == freqMax) {
     JsonDocument err;
@@ -272,8 +274,8 @@ void handleStartEis(JsonDocument &cmd) {
   float decades = fabs(log10(freqMax) - log10(freqMin));
   int pointsPerDecade = max(1, (int)round(points / max(decades, 0.01f)));
 
-  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) bias=%.1fmV\n",
-                freqMin, freqMax, points, pointsPerDecade, biasMillivolts);
+  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) bias=%.1fmV amplitude=%.1fmVpp\n",
+                freqMin, freqMax, points, pointsPerDecade, biasMillivolts, amplitudeMv);
 
   eisSweepInProgress = true;
   startBackup("eis");
@@ -289,7 +291,8 @@ void handleStartEis(JsonDocument &cmd) {
     freqMax, freqMin, pointsPerDecade,
     biasMillivolts, /*zeroVolt=*/0.0f, RCAL_OHMS,
     gainTable, gainTableSize,
-    /*extGain=*/1, /*dacGain=*/1
+    /*extGain=*/1, /*dacGain=*/1,
+    amplitudeMv
   );
   helpstat.runSweep(); // blocking; streams points via onEisPoint() as it runs
 

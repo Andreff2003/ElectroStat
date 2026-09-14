@@ -103,11 +103,6 @@ our discussion — Overlay is how you'd compare them either way.
 
 ## Known gaps / next steps
 
-- **AC excitation amplitude is fixed** at the HELPStat library's
-  hardcoded 200 mV peak-to-peak (`sineVpp` inside `AD5940_TDD` in
-  `HELPStat.cpp`). The app's "Amplitude" field is read by the firmware
-  but not yet wired through — would need a small change to
-  `AD5940_TDD` itself to accept it as a parameter.
 - **CV's applied-potential range is limited to roughly ±1.1 V**, set by
   the LPDAC bias path `AD5940_AmperometryStep()` uses (same range the
   original library's own bias code supports). A CV sweep asking for

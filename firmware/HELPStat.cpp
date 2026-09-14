@@ -584,14 +584,14 @@ void HELPStat::AD5940_TDD(calHSTIA *gainArr, int gainArrSize) {
   printf("Number of points to sweep: %d\n", _sweepCfg.SweepPoints);
   printf("Bias: %f, Zero: %f\n", _biasVolt, _zeroVolt);
 }
-void HELPStat::AD5940_TDD(float startFreq, float endFreq, uint32_t numPoints, float biasVolt, float zeroVolt, float rcalVal, calHSTIA *gainArr, int gainArrSize, int extGain, int dacGain) {
+void HELPStat::AD5940_TDD(float startFreq, float endFreq, uint32_t numPoints, float biasVolt, float zeroVolt, float rcalVal, calHSTIA *gainArr, int gainArrSize, int extGain, int dacGain, float amplitudeMv) {
 
   // SETUP Cfgs
   CLKCfg_Type clk_cfg;
   AGPIOCfg_Type gpio_cfg;
   ClksCalInfo_Type clks_cal;
   LPAmpCfg_Type LpAmpCfg;
-  
+
   // DFT / ADC / WG / HSLoop Cfgs
   AFERefCfg_Type aferef_cfg;
   HSLoopCfg_Type HsLoopCfg;
@@ -599,7 +599,10 @@ void HELPStat::AD5940_TDD(float startFreq, float endFreq, uint32_t numPoints, fl
 
   float sysClkFreq = 16000000.0; // 16 MHz
   float adcClkFreq = 16000000.0; // 16 MHz
-  float sineVpp = 200.0; // 200 mV 
+  // ElectroStat addition: was hardcoded to 200.0 (mV peak-to-peak) here;
+  // now the caller's requested amplitude, defaulting to the library's
+  // original 200 mV if omitted.
+  float sineVpp = amplitudeMv;
   _rcalVal = rcalVal;
 
   /* Configuring the Gain Array */

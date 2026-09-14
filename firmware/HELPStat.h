@@ -352,7 +352,11 @@ class HELPStat {
         /* 10-27-2023 - IMPEDANCE NO SEQUENCER - our methods for testing */
         // NOTE: Two overloads
         void AD5940_TDD(calHSTIA *gainArr, int gainArrSize);
-        void AD5940_TDD(float startFreq, float endFreq, uint32_t numPoints, float biasVolt, float zeroVolt, float rcalVal, calHSTIA *gainArr, int gainArrSize, int extGain, int dacGain); // works
+        /* ElectroStat addition: amplitudeMv (default 200, matching the
+           library's original hardcoded value) sets the AC excitation
+           amplitude in mV peak-to-peak, previously fixed inside this
+           function regardless of the caller's request. */
+        void AD5940_TDD(float startFreq, float endFreq, uint32_t numPoints, float biasVolt, float zeroVolt, float rcalVal, calHSTIA *gainArr, int gainArrSize, int extGain, int dacGain, float amplitudeMv = 200.0f); // works
         
         void AD5940_DFTMeasure(void); // works
         void pollDFT(int32_t* pReal, int32_t* pImage); // works
