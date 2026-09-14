@@ -68,6 +68,8 @@ export interface SWVDataPoint {
   baseline?: number;
   /** Baseline-corrected differential current (µA). */
   ICorrected?: number;
+  /** Live hardware only: HSTIA output fell outside the AD5941's usable ADC window for this point (forward or reverse pulse). */
+  outOfRange?: boolean;
 }
 
 export interface SWVParameters {
@@ -111,6 +113,8 @@ export interface SWVParameters {
   model?: SWVSimulationModel;
   /** Physical simulation model. Default: "reversible". */
   swvModel?: SWVModel;
+  /** HSTIA feedback resistor, ohms — one of the AD5941's discrete gain steps (200 to 160k). Defaults to 10000 (HSTIARTIA_10K) on the firmware if omitted. */
+  rtiaOhms?: number;
 }
 
 

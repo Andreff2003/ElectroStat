@@ -35,6 +35,8 @@ export interface FETParams {
   vgMax: number; // V
   vgStep: number; // mV (converted to V before sending)
   intervalMs: number;
+  /** HSTIA feedback resistor, ohms — one of the AD5941's discrete gain steps. */
+  rtiaOhms: number;
   // Analyte / device parameters (simulation)
   kd_nM: number;
   vtBaseline_V: number;
@@ -78,6 +80,7 @@ export const DEFAULT_FET_PARAMS: FETParams = {
   vgMax: 1.5,
   vgStep: 40,
   intervalMs: 200,
+  rtiaOhms: 10000,
   kd_nM: 25,
   vtBaseline_V: 0.30,
   deltaVtMax_V: 0.40,
@@ -108,6 +111,8 @@ export interface CVParams {
   // Acquisition
   stepPotential: number;    // mV per staircase step
   quietTime: number;        // s — equilibration at E_start
+  /** HSTIA feedback resistor, ohms — one of the AD5941's discrete gain steps. */
+  rtiaOhms: number;
 }
 
 export const DEFAULT_CV_PARAMS: CVParams = {
@@ -126,7 +131,24 @@ export const DEFAULT_CV_PARAMS: CVParams = {
   alpha: CV_BV_ALPHA,
   stepPotential: 2,
   quietTime: 2,
+  rtiaOhms: 10000,
 };
+
+/**
+ * The AD5941's 8 discrete HSTIA feedback-resistor gain steps. Used by the
+ * CV/BioFET/SWV parameter panels — EIS uses the AD5941's own DFT-based
+ * impedance path (with its own pre-existing gain table) and isn't affected.
+ */
+export const AD5941_RTIA_OPTIONS: { label: string; value: number }[] = [
+  { label: "200 Ω", value: 200 },
+  { label: "1 kΩ", value: 1000 },
+  { label: "5 kΩ", value: 5000 },
+  { label: "10 kΩ (default)", value: 10000 },
+  { label: "20 kΩ", value: 20000 },
+  { label: "40 kΩ", value: 40000 },
+  { label: "80 kΩ", value: 80000 },
+  { label: "160 kΩ", value: 160000 },
+];
 
 /** Redox-probe presets — apply only D and E°', leave everything else untouched. */
 export const CV_REDOX_PRESETS: Record<
@@ -363,6 +385,26 @@ const ParametersPanel = ({
               disabled={disabled}
               hint="Playback tick for the simulator; also sent as ESP32 sample interval."
             />
+            <div className="flex flex-col gap-1 col-span-2">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+                RTIA Gain
+              </Label>
+              <select
+                disabled={disabled}
+                value={fetParams.rtiaOhms}
+                onChange={(e) => onChangeFET({ ...fetParams, rtiaOhms: Number(e.target.value) })}
+                className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs"
+              >
+                {AD5941_RTIA_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-muted-foreground font-mono">
+                HSTIA feedback resistor on real hardware. Too low underuses the
+                ADC range for small currents; too high saturates it for large
+                ones — the app warns per point once live data is out of range.
+              </span>
+            </div>
 
             {/* ── Analyte / device parameters ─────────────────────── */}
             <div className="col-span-2 md:col-span-4 border-t border-border pt-3 mt-1 text-[10px] font-mono uppercase text-muted-foreground">
@@ -650,6 +692,26 @@ const ParametersPanel = ({
               disabled={disabled}
               hint="Equilibration time at E Start before the scan begins."
             />
+            <div className="flex flex-col gap-1 col-span-2">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+                RTIA Gain
+              </Label>
+              <select
+                disabled={disabled}
+                value={cvParams.rtiaOhms}
+                onChange={(e) => onChangeCV({ ...cvParams, rtiaOhms: Number(e.target.value) })}
+                className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs"
+              >
+                {AD5941_RTIA_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-muted-foreground font-mono">
+                HSTIA feedback resistor on real hardware. Too low underuses the
+                ADC range for small currents; too high saturates it for large
+                ones — the app warns per point once live data is out of range.
+              </span>
+            </div>
             {(() => {
               const totalRangeV =
                 2 *
@@ -743,6 +805,25 @@ const ParametersPanel = ({
               onChange={(v) => onChangeSWV({ ...swvParams, area_cm2: v })}
               disabled={disabled}
             />
+            <div className="flex flex-col gap-1">
+              <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+                RTIA Gain
+              </Label>
+              <select
+                disabled={disabled}
+                value={swvParams.rtiaOhms ?? 10000}
+                onChange={(e) => onChangeSWV({ ...swvParams, rtiaOhms: Number(e.target.value) })}
+                className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs"
+              >
+                {AD5941_RTIA_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-muted-foreground font-mono">
+                HSTIA feedback resistor. SWV's differential current is usually
+                smaller than CV's — a higher gain may use the ADC range better.
+              </span>
+            </div>
             <div className="flex flex-col gap-1">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 Direction

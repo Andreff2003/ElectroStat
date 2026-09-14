@@ -156,8 +156,9 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 console.warn("[ws] fet_transfer ignored — invalid frame", msg);
                 break;
               }
-              if (curve === "analyte") setFetAnalyte((prev) => [...prev, { vg, id }]);
-              else setFetBaseline((prev) => [...prev, { vg, id }]);
+              const outOfRange = msg.outOfRange === true ? true : undefined;
+              if (curve === "analyte") setFetAnalyte((prev) => [...prev, { vg, id, outOfRange }]);
+              else setFetBaseline((prev) => [...prev, { vg, id, outOfRange }]);
               break;
             }
 
@@ -168,7 +169,8 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 console.warn("[ws] fet_time ignored — invalid frame", msg);
                 break;
               }
-              setFetTimeData((prev) => [...prev, { time, id }]);
+              const outOfRange = msg.outOfRange === true ? true : undefined;
+              setFetTimeData((prev) => [...prev, { time, id, outOfRange }]);
               break;
             }
 
@@ -226,6 +228,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 ? Number(msg.time ?? msg.t ?? msg.time_s)
                 : NaN;
               const direction = msg.direction === "cathodic" ? "cathodic" : "anodic";
+              const outOfRange = msg.outOfRange === true ? true : undefined;
               setSwvData((prev) => [...prev, {
                 E,
                 // Preserve NaN when F/R are absent — recharts skips NaN points
@@ -237,6 +240,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 time,
                 index: idx,
                 direction,
+                outOfRange,
               }]);
               swvIndexRef.current = idx + 1;
               break;

@@ -57,6 +57,8 @@ export interface CVDataPoint {
   branch?: "forward" | "reverse" | "return"; // sweep segment
   baseline?: number;                          // µA — modelled baseline at this E (optional)
   Icorr?: number;                             // µA — baseline-corrected current (optional)
+  /** Live hardware only: HSTIA output fell outside the AD5941's usable ADC window for this point. */
+  outOfRange?: boolean;
 }
 
 export type CVModel = "reversible" | "quasi-reversible";
@@ -305,7 +307,8 @@ export function parseCVWebSocketMessage(msg: unknown): CVDataPoint | null {
     m.branch === "forward" || m.branch === "reverse" || m.branch === "return"
       ? (m.branch as "forward" | "reverse" | "return")
       : undefined;
-  return { E, I, cycle, t, branch };
+  const outOfRange = m.outOfRange === true ? true : undefined;
+  return { E, I, cycle, t, branch, outOfRange };
 }
 
 export function useSimulatedCVData(speed: number = 40) {

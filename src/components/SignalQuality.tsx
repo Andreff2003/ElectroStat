@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { EISDataPoint, FETTransferPoint } from "@/hooks/useSimulatedData";
+import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
 import { computeCVSignalQuality } from "@/utils/cvSignalQuality";
 import type { SWVDataPoint, SWVMetrics } from "@/types/swv";
@@ -46,9 +47,23 @@ interface SignalQualityProps {
   cvMetrics?: CVMetrics | null;
   cvNElectrons?: number;
   cvDeltaEpToleranceMv?: number;
+  /** Raw CV points — used only to check the outOfRange flag on live data. */
+  cvData?: CVDataPoint[];
   /** SWV inputs — used when mode === "swv". */
   swvData?: SWVDataPoint[];
   swvMetrics?: SWVMetrics | null;
+}
+
+/**
+ * Live-hardware-only check: counts points where the firmware flagged the
+ * HSTIA output as outside the AD5941's usable ADC window. Simulated data
+ * and older firmware never set `outOfRange`, so `anyFlagPresent` stays
+ * false and the caller shows nothing — this never affects simulated mode.
+ */
+function outOfRangeInfo(points: { outOfRange?: boolean }[]) {
+  const anyFlagPresent = points.some((p) => p.outOfRange !== undefined);
+  const count = points.filter((p) => p.outOfRange === true).length;
+  return { count, total: points.length, anyFlagPresent };
 }
 
 
@@ -462,7 +477,7 @@ const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: st
 );
 
 
-const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvNElectrons = 1, cvDeltaEpToleranceMv = 20, swvData, swvMetrics }: SignalQualityProps) => {
+const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvNElectrons = 1, cvDeltaEpToleranceMv = 20, cvData, swvData, swvMetrics }: SignalQualityProps) => {
   const eisMetrics = useMemo(
     () => computeEISMetrics(eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed),
     [eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed],
@@ -503,12 +518,24 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
     [swvData, swvMetrics],
   );
 
+  const rangeInfo = useMemo(
+    () =>
+      outOfRangeInfo(
+        mode === "fet" ? [...fetBaseline, ...fetAnalyte]
+        : mode === "cv" ? (cvData ?? [])
+        : mode === "swv" ? (swvData ?? [])
+        : [],
+      ),
+    [mode, fetBaseline, fetAnalyte, cvData, swvData],
+  );
+  const rangeLevel: Level = !rangeInfo.anyFlagPresent ? "idle" : rangeInfo.count > 0 ? "red" : "green";
+
   const m =
     mode === "eis" ? eisMetrics
     : mode === "fet" ? fetMetrics
     : mode === "cv" ? cvLevels
     : swvQuality;
-  const level: Level = m.level;
+  const level: Level = worstOf([m.level, rangeLevel]);
   const ready = m.ready;
   const pending = "Calculating...";
   const modeLabel = mode === "eis" ? "EIS" : mode === "fet" ? "BioFET" : mode === "cv" ? "CV" : "SWV";
@@ -576,6 +603,14 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
 
             <MetricRow label="Baseline Noise" title="100·std/|mean| over the deep-off (low Vg) region of the baseline. <5% green, <15% yellow, else red." value={ready ? `${fetMetrics.baselineStability.toFixed(1)} %` : pending} level={fetMetrics.stabilityLevel} />
+            {rangeInfo.anyFlagPresent && (
+              <MetricRow
+                label="HSTIA Range"
+                title="Live hardware only: points where the AD5941's HSTIA output fell outside its usable 0.2-2.1V ADC window — the reported current for those points may be inaccurate. Pick a different RTIA Gain in Parameters if this appears."
+                value={`${rangeInfo.count} / ${rangeInfo.total} out of range`}
+                level={rangeLevel}
+              />
+            )}
             {fetMetrics.negativeCurrentWarning && (
               <div className="text-[10px] font-mono text-yellow-500 mt-1 leading-snug">
                 ⚠ Ion/Ioff use |Id| — some Id values are negative.
@@ -608,6 +643,14 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
                 : cvMetrics ? `— (${cvMetrics.D_status})` : "—"}
               level={cvLevels.dLevel}
             />
+            {rangeInfo.anyFlagPresent && (
+              <MetricRow
+                label="HSTIA Range"
+                title="Live hardware only: points where the AD5941's HSTIA output fell outside its usable 0.2-2.1V ADC window — the reported current for those points may be inaccurate. Pick a different RTIA Gain in Parameters if this appears."
+                value={`${rangeInfo.count} / ${rangeInfo.total} out of range`}
+                level={rangeLevel}
+              />
+            )}
           </>
         )}
         {mode === "swv" && (
@@ -642,6 +685,14 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
               value={swvQuality.relNoise != null ? `${(swvQuality.relNoise * 100).toFixed(1)} % of peak` : ready ? "—" : pending}
               level={swvQuality.baselineLevel}
             />
+            {rangeInfo.anyFlagPresent && (
+              <MetricRow
+                label="HSTIA Range"
+                title="Live hardware only: points where the AD5941's HSTIA output fell outside its usable 0.2-2.1V ADC window (forward and/or reverse pulse) — the reported current for those points may be inaccurate. Pick a different RTIA Gain in Parameters if this appears."
+                value={`${rangeInfo.count} / ${rangeInfo.total} out of range`}
+                level={rangeLevel}
+              />
+            )}
           </>
         )}
 

@@ -1070,6 +1070,7 @@ const Index = () => {
         vgStep: fetParams.vgStep / 1000,
         intervalMs: fetParams.intervalMs,
         concentration: conc,
+        rtiaOhms: fetParams.rtiaOhms,
         ...overrides,
       });
       return;
@@ -1091,6 +1092,7 @@ const Index = () => {
         vgStep: fetParams.vgStep / 1000, // mV → V
         intervalMs: fetParams.intervalMs,
         concentration: conc,
+        rtiaOhms: fetParams.rtiaOhms,
         ...overrides,
       });
     }
@@ -3001,6 +3003,7 @@ const Index = () => {
                 fetAnalyte={[]}
                 cvMetrics={cvMetrics}
                 cvNElectrons={cvParams.n}
+                cvData={cvDataLive}
               />
               <MeasurementNotesPanel
                 mode="cv"

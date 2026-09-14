@@ -26,11 +26,15 @@ export interface EISDataPoint {
 export interface FETTransferPoint {
   vg: number;
   id: number;
+  /** Live hardware only: HSTIA output fell outside the AD5941's usable ADC window for this point. */
+  outOfRange?: boolean;
 }
 
 export interface FETTimePoint {
   time: number;
   id: number;
+  /** Live hardware only: HSTIA output fell outside the AD5941's usable ADC window for this point. */
+  outOfRange?: boolean;
 }
 
 // Shared simulated binding parameters
