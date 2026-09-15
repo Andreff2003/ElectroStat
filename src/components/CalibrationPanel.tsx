@@ -222,28 +222,6 @@ function fitLangmuirNLLS(
 }
 
 /** Linear fit Signal = m * C + b on points with C > 0. Returns slope, intercept, R², nPoints. */
-function fitLinear(points: CalibrationPoint[]): { slope: number; intercept: number; r2: number; nPoints: number } | null {
-  const used = points.filter((p) => p.concentration >= 0);
-  if (used.length < 2) return null;
-  const xs = used.map((p) => p.concentration);
-  const ys = used.map((p) => p.signal);
-  const n = xs.length;
-  const meanX = xs.reduce((a, b) => a + b, 0) / n;
-  const meanY = ys.reduce((a, b) => a + b, 0) / n;
-  let sxy = 0, sxx = 0, syy = 0;
-  for (let i = 0; i < n; i++) {
-    sxy += (xs[i] - meanX) * (ys[i] - meanY);
-    sxx += (xs[i] - meanX) ** 2;
-    syy += (ys[i] - meanY) ** 2;
-  }
-  if (sxx < 1e-12) return null;
-  const slope = sxy / sxx;
-  const intercept = meanY - slope * meanX;
-  const r2 = syy < 1e-12 ? 1 : 1 - (syy - slope * sxy) / syy;
-  return { slope, intercept, r2, nPoints: n };
-}
-
-/** Linear fit Signal = m * C + b on points with C > 0. Returns slope, intercept, R², nPoints. */
 function fitLinearSWV(points: CalibrationPoint[]): { slope: number; intercept: number; r2: number; nPoints: number } | null {
   const positive = points.filter((p) => p.concentration > 0);
   if (positive.length < 2) return null;
@@ -308,7 +286,16 @@ function computeLODSWV(
 }
 
 /**
- * LOD = 3 σ / |slope|.
+ * LOD = 3 σ / slope, LOQ = 10 σ / slope.
+ *
+ * `slope` must be the sensitivity at the LOW-concentration limit of
+ * whatever curve is actually being reported — for EIS/BioFET that's the
+ * Langmuir isotherm (Signal = Smax·C/(C+Kd)) plotted on the chart above,
+ * whose slope at C→0 is Smax/Kd, NOT a straight line fit across the whole
+ * (possibly saturating) concentration range. Fitting a plain regression
+ * line to points that span into saturation understates the true
+ * low-concentration sensitivity and inflates LOD/LOQ — pass the Langmuir
+ * fit's Smax/Kd in for eis/fet, not an independent linear fit.
  *
  * BioFET caveat — units must match.  Calibration points store `signal` in
  * mV (ΔVt) but `raw` in volts (Vt).  Computing σ over `raw` therefore needs
@@ -317,10 +304,12 @@ function computeLODSWV(
  */
 function computeLOD(
   points: CalibrationPoint[],
-  mode: "eis" | "fet" = "eis",
-): { value: number; sigmaSource: "replicates" | "two_percent_baseline" } | null {
+  mode: "eis" | "fet",
+  slope: number | null,
+): { value: number; loq: number; sigmaSource: "replicates" | "two_percent_baseline" } | null {
   const baseline = findBaseline(points);
   if (!baseline) return null;
+  if (slope == null || !(slope > 0)) return null;
   const baselines = points.filter((p) => p.concentration === 0);
   let sigmaRaw: number;
   let sigmaSource: "replicates" | "two_percent_baseline";
@@ -335,9 +324,7 @@ function computeLOD(
   }
   // BioFET: raw is in V, signal/slope are in mV → convert σ to mV.
   const sigma = mode === "fet" ? sigmaRaw * 1000 : sigmaRaw;
-  const linFit = fitLinear(points as CalibrationPoint[]);
-  if (!linFit || Math.abs(linFit.slope) < 1e-12) return null;
-  return { value: (3 * sigma) / Math.abs(linFit.slope), sigmaSource };
+  return { value: (3 * sigma) / slope, loq: (10 * sigma) / slope, sigmaSource };
 }
 
 const CalibrationPanel = ({
@@ -434,19 +421,36 @@ const CalibrationPanel = ({
     () => (mode !== "swv" && transformedPoints.length >= 4 ? fitLangmuirNLLS(transformedPoints) : null),
     [transformedPoints, mode],
   );
-  const lodResult = useMemo(
-    () => (mode === "swv" ? computeLODSWV(transformedPoints) : computeLOD(transformedPoints, mode as "eis" | "fet")),
+  // SWV only — EIS/BioFET's fit is `fit` (Langmuir) above.
+  const linear = useMemo(
+    () =>
+      mode === "swv" && transformedPoints.filter((p) => p.concentration > 0).length >= 2
+        ? fitLinearSWV(transformedPoints)
+        : null,
     [transformedPoints, mode],
+  );
+  // The single model that Sensitivity/R²/LOD/LOQ/quality below are all
+  // derived from — Langmuir for EIS/BioFET (the same curve drawn on the
+  // chart and summarised as Kd/Smax above), linear for SWV. Prior to this,
+  // EIS/BioFET silently computed those from an unrelated straight-line fit
+  // instead of the Langmuir curve actually being shown/reported, which
+  // could understate low-concentration sensitivity (and inflate LOD) when
+  // calibration points span into the saturating region.
+  const effectiveFit = useMemo(() => {
+    if (mode === "swv") {
+      return linear ? { slope: linear.slope, r2: linear.r2, nPoints: linear.nPoints } : null;
+    }
+    return fit ? { slope: fit.sMax / fit.kd, r2: fit.r2, nPoints: transformedPoints.length } : null;
+  }, [mode, linear, fit, transformedPoints.length]);
+  const lodResult = useMemo(
+    () =>
+      mode === "swv"
+        ? computeLODSWV(transformedPoints)
+        : computeLOD(transformedPoints, mode as "eis" | "fet", effectiveFit?.slope ?? null),
+    [transformedPoints, mode, effectiveFit],
   );
   const lod = lodResult?.value ?? null;
   const loq = "loq" in (lodResult ?? {}) ? (lodResult as { loq?: number } | null)?.loq ?? null : null;
-  const linear = useMemo(
-    () =>
-      mode === "swv"
-        ? (transformedPoints.filter((p) => p.concentration > 0).length >= 2 ? fitLinearSWV(transformedPoints) : null)
-        : (transformedPoints.length >= 3 ? fitLinear(transformedPoints as CalibrationPoint[]) : null),
-    [transformedPoints, mode],
-  );
 
   // Same at-a-glance verdict CV's calibration panel already computes:
   // combines fit quality (R²), a positive slope, and enough points into one
@@ -454,10 +458,10 @@ const CalibrationPanel = ({
   // themselves.
   const quality = useMemo(() => {
     const reasons: string[] = [];
-    const r2 = linear?.r2 ?? 0;
-    const n = linear?.nPoints ?? 0;
-    const slope = linear?.slope ?? 0;
-    if (!linear || slope <= 0) reasons.push("slope ≤ 0");
+    const r2 = effectiveFit?.r2 ?? 0;
+    const n = effectiveFit?.nPoints ?? 0;
+    const slope = effectiveFit?.slope ?? 0;
+    if (!effectiveFit || slope <= 0) reasons.push("slope ≤ 0");
     if (n < 3) reasons.push(`only ${n} usable point${n === 1 ? "" : "s"}`);
     let level: "green" | "yellow" | "red";
     if (n >= 5 && r2 >= 0.995 && slope > 0 && lod != null) {
@@ -467,10 +471,10 @@ const CalibrationPanel = ({
       if (lod == null) reasons.push("LOD requires blank replicates or ≥3 fit points");
     } else {
       level = "red";
-      if (linear && r2 < 0.98) reasons.push(`R² = ${r2.toFixed(3)} below 0.98`);
+      if (effectiveFit && r2 < 0.98) reasons.push(`R² = ${r2.toFixed(3)} below 0.98`);
     }
     return { level, reasons };
-  }, [linear, lod]);
+  }, [effectiveFit, lod]);
   const qualityColor =
     quality.level === "green" ? "text-graph-eis" : quality.level === "yellow" ? "text-yellow-500" : "text-destructive";
 
@@ -822,14 +826,14 @@ const CalibrationPanel = ({
       )}
       <div className="rounded-md bg-secondary/60 p-2 text-xs font-mono text-foreground space-y-0.5">
         <div>
-          Sensitivity:{" "}
+          Sensitivity<InfoHint text={mode === "swv" ? "Slope of the linear calibration fit." : "Slope of the Langmuir fit at the low-concentration limit (Smax/Kd) — the sensitivity of the same curve drawn above, not a separate straight-line fit."} />:{" "}
           <span className="text-primary">
-            {linear ? `${linear.slope.toFixed(3)} ${displayUnit}/nM` : "—"}
+            {effectiveFit ? `${effectiveFit.slope.toFixed(3)} ${displayUnit}/nM` : "—"}
           </span>
         </div>
         <div>
           R²<InfoHint text="Coefficient of determination for the calibration fit. Closer to 1.0 indicates the model explains the concentration-response relationship well." />:{" "}
-          <span className="text-primary">{linear ? linear.r2.toFixed(4) : "—"}</span>
+          <span className="text-primary">{effectiveFit ? effectiveFit.r2.toFixed(4) : "—"}</span>
         </div>
         <div>
           LOD (3σ/|slope|)<InfoHint text="Limit of Detection = 3σ(blank) / slope. The lowest concentration reliably distinguishable from a blank measurement." />:{" "}
