@@ -150,7 +150,7 @@ export function computeFETVt(curve: FETTransferPoint[]): number | null {
  * initial estimate — the caller must surface that, because a stalled fit
  * can still produce a respectable-looking R².
  */
-function fitLangmuirNLLS(
+export function fitLangmuirNLLS(
   points: { concentration: number; signal: number }[],
 ): { kd: number; sMax: number; r2: number; converged: boolean } | null {
   // Signals are already transformed by the caller (responseMode applied).
@@ -222,7 +222,7 @@ function fitLangmuirNLLS(
 }
 
 /** Linear fit Signal = m * C + b on points with C > 0. Returns slope, intercept, R², nPoints. */
-function fitLinearSWV(points: CalibrationPoint[]): { slope: number; intercept: number; r2: number; nPoints: number } | null {
+export function fitLinearSWV(points: CalibrationPoint[]): { slope: number; intercept: number; r2: number; nPoints: number } | null {
   const positive = points.filter((p) => p.concentration > 0);
   if (positive.length < 2) return null;
   const n = positive.length;
@@ -255,7 +255,7 @@ function fitLinearSWV(points: CalibrationPoint[]): { slope: number; intercept: n
  * This intentionally mirrors the SWVMode calibration logic to preserve existing
  * SWV behaviour when migrating to the shared panel.
  */
-function computeLODSWV(
+export function computeLODSWV(
   points: CalibrationPoint[],
 ): { value: number; loq: number; sigmaSource: "replicates" | "residuals" } | null {
   const positive = points.filter((p) => p.concentration > 0);
@@ -302,7 +302,7 @@ function computeLODSWV(
  * a ×1000 conversion before dividing by the mV/nM slope, otherwise the LOD
  * is off by a factor of 1000.
  */
-function computeLOD(
+export function computeLOD(
   points: CalibrationPoint[],
   mode: "eis" | "fet",
   slope: number | null,

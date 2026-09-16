@@ -7,6 +7,11 @@ import {
 import { fitEIS } from "@/utils/eisFit";
 import { linKKTest } from "@/utils/linKK";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
+import {
+  fitLangmuirNLLS,
+  computeLOD,
+  type CalibrationPoint,
+} from "@/components/CalibrationPanel";
 
 const TWO_PI = 2 * Math.PI;
 
@@ -163,5 +168,84 @@ describe("EIS — covariance in log-space (no false ill-conditioning)", () => {
     expect(Number.isFinite(r!.errors.Rct)).toBe(true);
     expect(Number.isFinite(r!.errors.Cdl)).toBe(true);
     expect(r!.covarianceMethod).toBe("log_space");
+  });
+});
+
+describe("EIS calibration — Langmuir fit, LOD/LOQ", () => {
+  // Same Langmuir shape and constants the app's own EIS simulator uses
+  // (KD=25 nM, ΔRct saturating around 500 Ω over a 300 Ω baseline Rct —
+  // see useSimulatedData.ts). Mirrors cv.test.ts's calibration block: 3
+  // baseline replicates (with small jitter, so sigma comes from
+  // "replicates" not the 2%-baseline fallback) plus duplicate
+  // measurements at 3 concentrations spanning into saturation.
+  const KD_NM = 25;
+  const SMAX_OHM = 500;
+  const RCT_BASELINE = 300;
+  const concentrations = [0, 0, 0, 10, 10, 50, 50, 200, 200];
+  const baselineJitterOhm = [-1, 0, 1];
+
+  function makePoints(): CalibrationPoint[] {
+    let blankIdx = 0;
+    return concentrations.map((c, i) => {
+      const deltaRct = c === 0 ? 0 : (SMAX_OHM * c) / (c + KD_NM);
+      const jitter = c === 0 ? baselineJitterOhm[blankIdx++] : 0;
+      return {
+        concentration: c,
+        signal: deltaRct,
+        raw: RCT_BASELINE + deltaRct + jitter,
+        timestamp: Date.now() + i,
+      };
+    });
+  }
+
+  it("recovers Kd/Smax from a clean synthetic Langmuir series", () => {
+    const pts = makePoints();
+    const fit = fitLangmuirNLLS(
+      pts.map((p) => ({ concentration: p.concentration, signal: p.signal })),
+    );
+    expect(fit).not.toBeNull();
+    expect(fit!.kd).toBeCloseTo(KD_NM, 0);
+    expect(fit!.sMax).toBeCloseTo(SMAX_OHM, -1);
+    expect(fit!.r2).toBeGreaterThan(0.98);
+  });
+
+  it("computes finite LOD < LOQ from the Langmuir low-concentration slope", () => {
+    const pts = makePoints();
+    const fit = fitLangmuirNLLS(
+      pts.map((p) => ({ concentration: p.concentration, signal: p.signal })),
+    );
+    expect(fit).not.toBeNull();
+    const slope = fit!.sMax / fit!.kd;
+    const result = computeLOD(pts, "eis", slope);
+    expect(result).not.toBeNull();
+    expect(result!.sigmaSource).toBe("replicates");
+    expect(Number.isFinite(result!.value)).toBe(true);
+    expect(Number.isFinite(result!.loq)).toBe(true);
+    expect(result!.value).toBeGreaterThan(0);
+    expect(result!.loq).toBeGreaterThan(result!.value); // 10σ > 3σ
+  });
+
+  it("returns null when no slope is available (too few points for a Langmuir fit)", () => {
+    const pts = makePoints().slice(0, 2);
+    expect(computeLOD(pts, "eis", null)).toBeNull();
+  });
+
+  // Regression guard for the bug fixed in CalibrationPanel.tsx: LOD/LOQ
+  // must come from the Langmuir curve's initial slope (Smax/Kd), not from
+  // a straight line fit across the whole range. A plain regression line
+  // through points that span into saturation is much shallower than the
+  // true low-concentration sensitivity, which understates it and inflates
+  // LOD. Compare against the secant from the origin to the most-saturated
+  // point, which approximates what that old straight-line fit produced.
+  it("the Langmuir low-concentration slope is markedly steeper than the whole-range secant", () => {
+    const pts = makePoints();
+    const fit = fitLangmuirNLLS(
+      pts.map((p) => ({ concentration: p.concentration, signal: p.signal })),
+    );
+    expect(fit).not.toBeNull();
+    const langmuirSlope = fit!.sMax / fit!.kd;
+    const maxC = Math.max(...concentrations);
+    const secantSlope = fit!.sMax / (maxC + fit!.kd);
+    expect(langmuirSlope).toBeGreaterThan(secantSlope * 2);
   });
 });

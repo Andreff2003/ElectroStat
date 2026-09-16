@@ -8,6 +8,11 @@ import {
   validateSWVParameters,
 } from "@/utils/swvMetrics";
 import type { SWVDataPoint, SWVParameters } from "@/types/swv";
+import {
+  fitLinearSWV,
+  computeLODSWV,
+  type CalibrationPoint,
+} from "@/components/CalibrationPanel";
 
 const baseParams: SWVParameters = {
   startE: -0.2,
@@ -283,6 +288,68 @@ describe("SWV physical solvers — reversible vs quasi-reversible", () => {
     const attenuated = Math.abs(qr.I) < Math.abs(rev.I) * 0.98;
     const shifted = Math.abs(qr.E - rev.E) > 0.005;
     expect(attenuated || shifted).toBe(true);
+  });
+});
+
+describe("SWV calibration — linear fit, LOD/LOQ", () => {
+  // The default/demo SWV simulator model is diffusion-controlled (same
+  // physics family as CV — see the header comment in
+  // useSimulatedSWVData.ts), so a linear signal-vs-concentration series is
+  // the physically appropriate synthetic input here — unlike EIS/BioFET's
+  // saturating Langmuir series, which is a genuinely different technique
+  // (surface-binding, not bulk diffusion). Mirrors cv.test.ts's
+  // calibration block: 3 baseline replicates + duplicate measurements at
+  // 3 concentrations.
+  const SLOPE_UA_PER_NM = 0.05;
+  const concentrations = [0, 0, 0, 10, 10, 50, 50, 200, 200];
+  const blankJitterUA = [-0.01, 0, 0.01];
+
+  function makePoints(): CalibrationPoint[] {
+    let blankIdx = 0;
+    return concentrations.map((c, i) => {
+      const signal = c === 0 ? blankJitterUA[blankIdx++] : SLOPE_UA_PER_NM * c;
+      return { concentration: c, signal, raw: signal, timestamp: Date.now() + i };
+    });
+  }
+
+  it("recovers the slope from a clean synthetic linear series", () => {
+    const fit = fitLinearSWV(makePoints());
+    expect(fit).not.toBeNull();
+    expect(fit!.slope).toBeCloseTo(SLOPE_UA_PER_NM, 2);
+    expect(fit!.r2).toBeGreaterThan(0.98);
+  });
+
+  it("computes finite LOD < LOQ from blank replicates", () => {
+    const result = computeLODSWV(makePoints());
+    expect(result).not.toBeNull();
+    expect(result!.sigmaSource).toBe("replicates");
+    expect(Number.isFinite(result!.value)).toBe(true);
+    expect(Number.isFinite(result!.loq)).toBe(true);
+    expect(result!.value).toBeGreaterThan(0);
+    expect(result!.loq).toBeGreaterThan(result!.value); // 10σ > 3σ
+  });
+
+  it("falls back to fit residuals when fewer than 2 blank replicates are present", () => {
+    const pts: CalibrationPoint[] = [
+      { concentration: 0, signal: 0, raw: 0, timestamp: 1 },
+      { concentration: 10, signal: SLOPE_UA_PER_NM * 10, raw: SLOPE_UA_PER_NM * 10, timestamp: 2 },
+      { concentration: 50, signal: SLOPE_UA_PER_NM * 50, raw: SLOPE_UA_PER_NM * 50, timestamp: 3 },
+      { concentration: 200, signal: SLOPE_UA_PER_NM * 200, raw: SLOPE_UA_PER_NM * 200, timestamp: 4 },
+    ];
+    const result = computeLODSWV(pts);
+    expect(result).not.toBeNull();
+    expect(result!.sigmaSource).toBe("residuals");
+    expect(Number.isFinite(result!.value)).toBe(true);
+    expect(result!.value).toBeGreaterThanOrEqual(0);
+  });
+
+  it("returns null when the fit slope is not positive", () => {
+    const flat: CalibrationPoint[] = [
+      { concentration: 0, signal: 0, raw: 0, timestamp: 1 },
+      { concentration: 10, signal: 0, raw: 0, timestamp: 2 },
+      { concentration: 50, signal: 0, raw: 0, timestamp: 3 },
+    ];
+    expect(computeLODSWV(flat)).toBeNull();
   });
 });
 
