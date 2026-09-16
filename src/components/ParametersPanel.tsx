@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronDown, Settings2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InfoHint } from "@/components/InfoHint";
 import {
   Collapsible,
   CollapsibleContent,
@@ -183,12 +184,18 @@ interface NumFieldProps {
   step?: number;
   onChange: (v: number) => void;
   disabled?: boolean;
+  /** Short, always-visible note — only what's needed to pick a value (a default or recommended range). */
   hint?: string;
+  /** Longer explanation, shown on hover via the (i) icon next to the label. */
+  info?: string;
 }
 
-const NumField = ({ label, value, min, max, step, onChange, disabled, hint }: NumFieldProps) => (
+const NumField = ({ label, value, min, max, step, onChange, disabled, hint, info }: NumFieldProps) => (
   <div className="flex flex-col gap-1">
-    <Label className="text-[10px] font-mono uppercase text-muted-foreground">{label}</Label>
+    <Label className="text-[10px] font-mono uppercase text-muted-foreground">
+      {label}
+      {info && <InfoHint text={info} />}
+    </Label>
     <Input
       type="number"
       value={Number.isFinite(value) ? value : ""}
@@ -275,7 +282,8 @@ const ParametersPanel = ({
               max={100000}
               onChange={(v) => onChangeEIS({ ...eisParams, freqMin: v })}
               disabled={disabled}
-              hint="Lower values (0.1–1 Hz) needed to capture Warburg tail"
+              hint="0.1–1 Hz recommended"
+              info="Lower frequencies are needed to capture the Warburg diffusion tail in the Nyquist plot."
             />
             <NumField
               label="Frequency Max (Hz)"
@@ -297,7 +305,8 @@ const ParametersPanel = ({
                     onChangeEIS({ ...eisParams, pointsPerDecade: Math.round(v) })
                   }
                   disabled={disabled}
-                  hint="Recommended: 7–10 for well-resolved semicircle"
+                  hint="7–10 recommended"
+                  info="Higher values give a better-resolved semicircle fit."
                 />
                 <span className="text-[10px] text-muted-foreground font-mono">
                   ≈ {computedTotal} points over {decades.toFixed(1)} decades
@@ -333,13 +342,9 @@ const ParametersPanel = ({
                 step={0.01}
                 onChange={(v) => onChangeEIS({ ...eisParams, dcBias: v })}
                 disabled={disabled}
-                hint="0 V = measure at open-circuit potential (recommended)"
+                hint="0 V recommended (open-circuit)"
+                info="The AC excitation signal is superimposed on this DC offset. Keep at 0 V unless deliberately polarising the electrode away from its natural equilibrium potential."
               />
-              <span className="text-[10px] text-muted-foreground font-mono">
-                The AC excitation signal is superimposed on this DC offset.
-                Keep at 0 V unless deliberately polarising the electrode away
-                from its natural equilibrium potential.
-              </span>
               {dcBiasWarn && (
                 <span className="text-[10px] font-mono text-amber-500">
                   ⚠ Large DC bias may polarise the electrode away from OCP
@@ -383,11 +388,12 @@ const ParametersPanel = ({
               step={1}
               onChange={(v) => onChangeFET({ ...fetParams, intervalMs: Math.round(v) })}
               disabled={disabled}
-              hint="Playback tick for the simulator; also sent as ESP32 sample interval."
+              info="Playback tick for the simulator; also sent as ESP32 sample interval."
             />
             <div className="flex flex-col gap-1 col-span-2">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 RTIA Gain
+                <InfoHint text="HSTIA feedback resistor on real hardware. Too low underuses the ADC range for small currents, too high saturates it for large ones; the app flags out-of-range readings per point." />
               </Label>
               <select
                 disabled={disabled}
@@ -399,11 +405,7 @@ const ParametersPanel = ({
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                HSTIA feedback resistor on real hardware. Too low underuses the
-                ADC range for small currents; too high saturates it for large
-                ones — the app warns per point once live data is out of range.
-              </span>
+              <span className="text-[10px] text-muted-foreground font-mono">10 kΩ default.</span>
             </div>
 
             {/* ── Analyte / device parameters ─────────────────────── */}
@@ -416,7 +418,7 @@ const ParametersPanel = ({
               min={0.1} max={10000} step={0.1}
               onChange={(v) => onChangeFET({ ...fetParams, kd_nM: v })}
               disabled={disabled}
-              hint="Aptamer/MIP dissociation constant for your specific analyte."
+              info="Aptamer/MIP dissociation constant for your specific analyte."
             />
             <NumField
               label="Vt Baseline (V)"
@@ -431,7 +433,7 @@ const ParametersPanel = ({
               min={0} max={1} step={0.01}
               onChange={(v) => onChangeFET({ ...fetParams, deltaVtMax_V: v })}
               disabled={disabled}
-              hint="Maximum threshold shift at saturating analyte concentration."
+              info="Maximum threshold shift at saturating analyte concentration."
             />
             <NumField
               label="Id Max (µA)"
@@ -446,7 +448,8 @@ const ParametersPanel = ({
               min={1} max={4} step={0.1}
               onChange={(v) => onChangeFET({ ...fetParams, idealityFactor: v })}
               disabled={disabled}
-              hint="Subthreshold slope factor. 1 = ideal MOSFET, higher = more sluggish subthreshold turn-on."
+              hint="1 = ideal MOSFET"
+              info="Subthreshold slope factor; higher means a more sluggish subthreshold turn-on."
             />
 
             {/* ── Time response settings ──────────────────────────── */}
@@ -459,7 +462,7 @@ const ParametersPanel = ({
               min={0.01} max={10} step={0.01}
               onChange={(v) => onChangeFET({ ...fetParams, bindingRate_perS: v })}
               disabled={disabled}
-              hint="Pseudo-first-order association rate constant."
+              info="Pseudo-first-order association rate constant."
             />
             <NumField
               label="Readout Bias (V)"
@@ -467,7 +470,7 @@ const ParametersPanel = ({
               min={-1} max={2} step={0.01}
               onChange={(v) => onChangeFET({ ...fetParams, readoutBias_V: v })}
               disabled={disabled}
-              hint="Fixed gate voltage at which drain current is monitored over time."
+              info="Fixed gate voltage at which drain current is monitored over time."
             />
             <NumField
               label="Duration (s)"
@@ -489,7 +492,7 @@ const ParametersPanel = ({
               min={0} max={fetParams.timeDuration_s} step={0.5}
               onChange={(v) => onChangeFET({ ...fetParams, injectionTime_s: v })}
               disabled={disabled}
-              hint="Simulated analyte injection onset. Also set by clicking + Add Sample before starting."
+              info="Simulated analyte injection onset; also settable by clicking + Add Sample before starting."
             />
           </div>
         )}
@@ -566,6 +569,7 @@ const ParametersPanel = ({
             <div className="flex flex-col gap-1 col-span-2">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 CV Model
+                <InfoHint text="Reversible = semi-infinite diffusion with a Nernst boundary. Quasi-reversible is an educational Butler-Volmer approximation; D apparent may be biased." />
               </Label>
               <select
                 disabled={disabled}
@@ -583,17 +587,14 @@ const ParametersPanel = ({
                   Quasi-reversible (Butler–Volmer)
                 </option>
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                Default: reversible diffusion solver (semi-infinite diffusion
-                with Nernst boundary). Quasi-reversible is an educational
-                approximation; D apparent may be biased.
-              </span>
+              <span className="text-[10px] text-muted-foreground font-mono">Default: reversible.</span>
             </div>
 
             {/* ── Analyte-specific electrochemistry ─────────────────── */}
             <div className="col-span-2 md:col-span-4 border-t border-border pt-3 mt-1 flex flex-col gap-1">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 Redox Probe Preset
+                <InfoHint text={'Fills D and E°\' with literature values. k₀, α and acquisition fields are left unchanged. "Custom" allows any analyte-specific value.'} />
               </Label>
               <select
                 disabled={disabled}
@@ -621,11 +622,6 @@ const ParametersPanel = ({
                   Ferrocenemethanol (D=7.8e-6, E°'=0.20 V)
                 </option>
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                Fills D and E°' with literature values. k₀, α and acquisition
-                fields are left unchanged. "Custom" allows any analyte-specific
-                value.
-              </span>
             </div>
             <NumField
               label="D (cm²/s)"
@@ -635,7 +631,8 @@ const ParametersPanel = ({
               step={1e-7}
               onChange={(v) => onChangeCV({ ...cvParams, diffusionCoeff: v })}
               disabled={disabled}
-              hint="Diffusion coefficient of the analyte. Default: 7.26e-6 (ferri/ferrocyanide)."
+              hint="Default: 7.26e-6 (ferri/ferrocyanide)"
+              info="Diffusion coefficient of the analyte."
             />
             <NumField
               label="E°' (V)"
@@ -645,7 +642,8 @@ const ParametersPanel = ({
               step={0.01}
               onChange={(v) => onChangeCV({ ...cvParams, formalPotential: v })}
               disabled={disabled}
-              hint="Formal redox potential vs reference. Default: 0.22 V (ferri/ferro vs Ag/AgCl)."
+              hint="Default: 0.22 V (ferri/ferro vs Ag/AgCl)"
+              info="Formal redox potential vs reference electrode."
             />
             <NumField
               label="k₀ (cm/s)"
@@ -655,7 +653,7 @@ const ParametersPanel = ({
               step={0.001}
               onChange={(v) => onChangeCV({ ...cvParams, k0: v })}
               disabled={disabled || cvParams.cvModel !== "quasi-reversible"}
-              hint="Heterogeneous electron-transfer rate constant. Lower k₀ = larger ΔEp."
+              info="Heterogeneous electron-transfer rate constant. Lower k₀ gives a larger ΔEp."
             />
             <NumField
               label="α (transfer coeff.)"
@@ -665,7 +663,7 @@ const ParametersPanel = ({
               step={0.05}
               onChange={(v) => onChangeCV({ ...cvParams, alpha: v })}
               disabled={disabled || cvParams.cvModel !== "quasi-reversible"}
-              hint="Charge-transfer coefficient (typically 0.3–0.7)."
+              hint="Typically 0.3–0.7"
             />
             <div className="col-span-2 md:col-span-4 text-[10px] font-mono text-muted-foreground">
               k₀ and α only apply to the Quasi-reversible (Butler–Volmer) model.
@@ -680,7 +678,7 @@ const ParametersPanel = ({
               step={0.5}
               onChange={(v) => onChangeCV({ ...cvParams, stepPotential: v })}
               disabled={disabled}
-              hint="Potential increment per data point (staircase approximation of the linear scan)."
+              info="Potential increment per data point (staircase approximation of the linear scan)."
             />
             <NumField
               label="Quiet Time (s)"
@@ -690,11 +688,12 @@ const ParametersPanel = ({
               step={1}
               onChange={(v) => onChangeCV({ ...cvParams, quietTime: v })}
               disabled={disabled}
-              hint="Equilibration time at E Start before the scan begins."
+              info="Equilibration time at E Start before the scan begins."
             />
             <div className="flex flex-col gap-1 col-span-2">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 RTIA Gain
+                <InfoHint text="HSTIA feedback resistor on real hardware. Too low underuses the ADC range for small currents, too high saturates it for large ones; the app flags out-of-range readings per point." />
               </Label>
               <select
                 disabled={disabled}
@@ -706,11 +705,7 @@ const ParametersPanel = ({
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                HSTIA feedback resistor on real hardware. Too low underuses the
-                ADC range for small currents; too high saturates it for large
-                ones — the app warns per point once live data is out of range.
-              </span>
+              <span className="text-[10px] text-muted-foreground font-mono">10 kΩ default.</span>
             </div>
             {(() => {
               const totalRangeV =
@@ -737,7 +732,7 @@ const ParametersPanel = ({
                   </div>
                   {heavyQuasi && (
                     <div className="text-yellow-500">
-                      ⚠ {estPts} points with the quasi-reversible model is slow —
+                      ⚠ {estPts} points with the quasi-reversible model is slow;
                       this solver scales quadratically and will freeze the page
                       while it runs. Increase the step or reduce cycles.
                     </div>
@@ -808,6 +803,7 @@ const ParametersPanel = ({
             <div className="flex flex-col gap-1">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 RTIA Gain
+                <InfoHint text="HSTIA feedback resistor. SWV's differential current is usually smaller than CV's, so a higher gain may use the ADC range better." />
               </Label>
               <select
                 disabled={disabled}
@@ -819,10 +815,7 @@ const ParametersPanel = ({
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                HSTIA feedback resistor. SWV's differential current is usually
-                smaller than CV's — a higher gain may use the ADC range better.
-              </span>
+              <span className="text-[10px] text-muted-foreground font-mono">10 kΩ default.</span>
             </div>
             <div className="flex flex-col gap-1">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
@@ -868,6 +861,7 @@ const ParametersPanel = ({
             <div className="flex flex-col gap-1 col-span-2">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 SWV Model
+                <InfoHint text="Reversible = same diffusion physics as CV's reversible model, applied per half-pulse. Quasi-reversible is an educational approximation and much slower on dense sweeps." />
               </Label>
               <select
                 disabled={disabled}
@@ -885,11 +879,7 @@ const ParametersPanel = ({
                   Quasi-reversible (Butler–Volmer)
                 </option>
               </select>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                Default: reversible diffusion solver, same physics as the CV
-                reversible model applied per half-pulse. Quasi-reversible is an
-                educational approximation and is much slower on dense sweeps.
-              </span>
+              <span className="text-[10px] text-muted-foreground font-mono">Default: reversible.</span>
             </div>
 
             {/* ── Analyte-specific electrochemistry (SWV) ──────────── */}
@@ -931,7 +921,8 @@ const ParametersPanel = ({
               min={1e-8} max={1e-3} step={1e-7}
               onChange={(v) => onChangeSWV({ ...swvParams, diffusionCoeff: v })}
               disabled={disabled}
-              hint="Diffusion coefficient of the analyte. Default: 7.26e-6 (ferri/ferrocyanide)."
+              hint="Default: 7.26e-6 (ferri/ferrocyanide)"
+              info="Diffusion coefficient of the analyte."
             />
             <NumField
               label="E°' (V)"
@@ -939,7 +930,7 @@ const ParametersPanel = ({
               min={-1} max={1} step={0.01}
               onChange={(v) => onChangeSWV({ ...swvParams, formalPotential: v })}
               disabled={disabled}
-              hint="Formal redox potential vs reference electrode."
+              info="Formal redox potential vs reference electrode."
             />
             <NumField
               label="k₀ (cm/s)"
@@ -947,7 +938,7 @@ const ParametersPanel = ({
               min={1e-6} max={10} step={0.001}
               onChange={(v) => onChangeSWV({ ...swvParams, k0: v })}
               disabled={disabled}
-              hint="Heterogeneous electron-transfer rate constant. SWV peak height and shape are sensitive to k₀, especially at higher frequencies."
+              info="Heterogeneous electron-transfer rate constant. SWV peak height and shape are sensitive to k₀, especially at higher frequencies."
             />
             <NumField
               label="α (transfer coeff.)"
