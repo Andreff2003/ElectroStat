@@ -332,6 +332,8 @@ const ParametersPanel = ({
               max={200}
               onChange={(v) => onChangeEIS({ ...eisParams, amplitude: v })}
               disabled={disabled}
+              hint="≤ ~800 mV on this hardware"
+              info="Peak-to-peak AC excitation amplitude. The firmware clamps the sine generator to roughly 0-800 mV; the app warns if this is exceeded."
             />
             <div className="flex flex-col gap-1 col-span-2">
               <NumField
@@ -363,6 +365,8 @@ const ParametersPanel = ({
               max={0}
               onChange={(v) => onChangeFET({ ...fetParams, vgMin: v })}
               disabled={disabled}
+              hint="≤ ±1.1 V on this hardware"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; a sweep asking for more will clip at the extremes."
             />
             <NumField
               label="Vg Max (V)"
@@ -371,6 +375,8 @@ const ParametersPanel = ({
               max={3}
               onChange={(v) => onChangeFET({ ...fetParams, vgMax: v })}
               disabled={disabled}
+              hint="≤ ±1.1 V on this hardware"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; a sweep asking for more will clip at the extremes."
             />
             <NumField
               label="Vg Step (mV)"
@@ -470,7 +476,8 @@ const ParametersPanel = ({
               min={-1} max={2} step={0.01}
               onChange={(v) => onChangeFET({ ...fetParams, readoutBias_V: v })}
               disabled={disabled}
-              info="Fixed gate voltage at which drain current is monitored over time."
+              hint="≤ ±1.1 V on this hardware"
+              info="Fixed gate voltage at which drain current is monitored over time. The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference."
             />
             <NumField
               label="Duration (s)"
@@ -515,6 +522,8 @@ const ParametersPanel = ({
               max={2}
               onChange={(v) => onChangeCV({ ...cvParams, eStart: v })}
               disabled={disabled}
+              hint="≤ ±1.1 V on this hardware"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; a sweep asking for more will clip at the extremes."
             />
             <NumField
               label="E Vertex 1 (V)"
@@ -523,6 +532,8 @@ const ParametersPanel = ({
               max={2}
               onChange={(v) => onChangeCV({ ...cvParams, eVertex1: v })}
               disabled={disabled}
+              hint="≤ ±1.1 V on this hardware"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; a sweep asking for more will clip at the extremes."
             />
             <NumField
               label="E Vertex 2 (V)"
@@ -531,6 +542,8 @@ const ParametersPanel = ({
               max={2}
               onChange={(v) => onChangeCV({ ...cvParams, eVertex2: v })}
               disabled={disabled}
+              hint="≤ ±1.1 V on this hardware"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; a sweep asking for more will clip at the extremes."
             />
             <NumField
               label="Cycles"
@@ -751,6 +764,8 @@ const ParametersPanel = ({
               max={2}
               onChange={(v) => onChangeSWV({ ...swvParams, startE: v })}
               disabled={disabled}
+              hint="Window ± amplitude ≤ ±1.1 V"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; E Start/E End plus the pulse Amplitude together must stay inside that window or the sweep will clip."
             />
             <NumField
               label="E End (V)"
@@ -759,6 +774,8 @@ const ParametersPanel = ({
               max={2}
               onChange={(v) => onChangeSWV({ ...swvParams, endE: v })}
               disabled={disabled}
+              hint="Window ± amplitude ≤ ±1.1 V"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; E Start/E End plus the pulse Amplitude together must stay inside that window or the sweep will clip."
             />
             <NumField
               label="Step (mV)"
@@ -775,6 +792,8 @@ const ParametersPanel = ({
               max={200}
               onChange={(v) => onChangeSWV({ ...swvParams, amplitude_mV: v })}
               disabled={disabled}
+              hint="Window ± amplitude ≤ ±1.1 V"
+              info="The LPDAC bias path on real hardware supports roughly ±1.1 V around the Vzero reference; the pulse amplitude adds to E Start/E End, so a large amplitude can push the window past that limit even if E Start/E End alone look fine."
             />
             <NumField
               label="Frequency (Hz)"
