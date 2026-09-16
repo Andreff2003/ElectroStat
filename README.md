@@ -31,17 +31,18 @@ The system is split into three layers:
 ### Web app
 
 ```bash
-bun install
-bun run dev
+npm install
+npm run dev
 ```
 
-This repository is set up for [Bun](https://bun.sh) (`bun.lock`). Note that
-`package.json` and `bunfig.toml` reference packages under the `@lovable.dev`
-npm scope, used by this project's Lovable-connected dev tooling; installing
-outside an environment with access to that registry has been reported to
-fail (registry errors on the `@lovable.dev/*` packages), and this hasn't
-been independently verified in a clean environment. If `bun install` fails
-for that reason, that dependency is the likely cause.
+Verified working with plain `npm` (Node 24) in a clean environment outside
+Lovable — 498 packages, no registry errors on the `@lovable.dev/*` packages
+this repo's dev tooling references. This repo is set up for
+[Bun](https://bun.sh) too (`bun.lock`); `bun install`/`bun run dev` work the
+same way, but `bun install` has been separately reported to fail outside an
+environment with access to Lovable's registry (403s on the
+`@lovable.dev/*` packages specifically) — that hasn't reproduced with npm,
+so if `bun install` fails for you, try npm instead.
 
 ### Bridge
 

@@ -1952,7 +1952,11 @@ const Index = () => {
         demoRunning={demoRunning}
         demoStep={demoStep}
         onStartDemo={() => runDemoPhase("eis")}
-        onContinueDemo={() => runDemoPhase(demoPhase)}
+        onContinueDemo={() => {
+          if (demoPhase === "eis" || demoPhase === "cv" || demoPhase === "swv" || demoPhase === "fet") {
+            runDemoPhase(demoPhase);
+          }
+        }}
         onCancelDemo={cancelDemo}
         onResetDemo={() => setDemoPhase("idle")}
       />

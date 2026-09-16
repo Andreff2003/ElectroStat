@@ -93,9 +93,11 @@ const NyquistPlot = ({
     try {
       const axisMap = e?.xAxisMap;
       if (axisMap && typeof e?.chartX === "number") {
-        const axis = Object.values(axisMap)[0] as { scale?: (v: number) => number } | undefined;
+        const axis = Object.values(axisMap)[0] as
+          | { scale?: ((v: number) => number) & { invert?: (v: number) => number } }
+          | undefined;
         if (axis?.scale) {
-          const val = axis.scale.invert ? (axis.scale as any).invert(e.chartX) : null;
+          const val = axis.scale.invert ? axis.scale.invert(e.chartX) : null;
           if (typeof val === "number" && Number.isFinite(val)) return val;
         }
       }
