@@ -992,7 +992,7 @@ const Index = () => {
         concentration: conc,
       });
     } else if (dataSource === "simulated") {
-      eis.start(conc, actualPoints);
+      eis.start(conc, actualPoints, eisParams.freqMin, eisParams.freqMax);
     } else {
       ws.clearEIS();
       ws.sendCommand("start_eis", {

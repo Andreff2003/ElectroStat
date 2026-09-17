@@ -61,15 +61,13 @@ export function useSimulatedEIS(speed: number = 200) {
   const [isRunning, setIsRunning] = useState(false);
   const allPoints = useRef<EISDataPoint[]>([]);
 
-  const buildPoints = useCallback((concentration: number, totalPoints = 61) => {
+  const buildPoints = useCallback((concentration: number, totalPoints = 61, freqMin = 0.1, freqMax = 1e5) => {
     const deltaRct =
       concentration > 0
         ? (RCT_MAX - RCT_MIN) * concentration / (concentration + KD)
         : 0;
     const Rct = RCT_MIN + deltaRct;
 
-    const freqMin = 0.1;
-    const freqMax = 1e5;
     const logMin = Math.log10(freqMin);
     const logMax = Math.log10(freqMax);
 
@@ -132,8 +130,8 @@ export function useSimulatedEIS(speed: number = 200) {
     return () => clearInterval(interval);
   }, [isRunning, speed]);
 
-  const start = useCallback((concentration: number = 0, totalPoints?: number) => {
-    allPoints.current = buildPoints(concentration, totalPoints);
+  const start = useCallback((concentration: number = 0, totalPoints?: number, freqMin?: number, freqMax?: number) => {
+    allPoints.current = buildPoints(concentration, totalPoints, freqMin, freqMax);
     setData([]);
     indexRef.current = 0;
     setIsRunning(true);
