@@ -291,6 +291,7 @@ const NyquistPlot = ({
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 12,
               }}
+              itemStyle={{ color: "hsl(210 20% 90%)" }}
               formatter={(value: number, name: string) => [`${value.toFixed(1)} Ω`, name]}
             />
 
