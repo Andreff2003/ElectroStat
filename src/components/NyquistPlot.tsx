@@ -78,6 +78,34 @@ const NyquistPlot = ({
 
   const fitLine = (fittedCurve ?? []).map(d => ({ x: d.zReal, y: -d.zImag }));
 
+  // Nyquist plots only read as a true semicircle when 1 Ω on X spans the
+  // same pixel distance as 1 Ω on Y. Recharts' default ['auto','auto']
+  // domains scale each axis independently off whatever range that data
+  // happens to have, so the same underlying circuit can look flattened or
+  // nicely round from one sweep to the next depending on how much Warburg
+  // tail is present. Force both axes to share one square, centered range.
+  const { xDomain, yDomain } = useMemo(() => {
+    const allPts = [
+      ...semiPts, ...warbPts, ...fitLine,
+      ...ovs.flatMap(o => o.data.map(d => ({ x: d.zReal, y: -d.zImag }))),
+    ];
+    if (allPts.length === 0) return { xDomain: [0, 1] as [number, number], yDomain: [0, 1] as [number, number] };
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const p of allPts) {
+      if (p.x < xMin) xMin = p.x;
+      if (p.x > xMax) xMax = p.x;
+      if (p.y < yMin) yMin = p.y;
+      if (p.y > yMax) yMax = p.y;
+    }
+    const span = Math.max(xMax - xMin, yMax - yMin, 1) * 1.1;
+    const xCenter = (xMin + xMax) / 2;
+    const yCenter = (yMin + yMax) / 2;
+    return {
+      xDomain: [xCenter - span / 2, xCenter + span / 2] as [number, number],
+      yDomain: [yCenter - span / 2, yCenter + span / 2] as [number, number],
+    };
+  }, [semiPts, warbPts, fitLine, ovs]);
+
   const [zoomArea, setZoomArea] = useState<{ x1: number; x2: number } | null>(null);
   const [zoomDomain, setZoomDomain] = useState<{ x: [number, number]; y: [number, number] } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
@@ -177,8 +205,9 @@ const NyquistPlot = ({
               dataKey="x"
               type="number"
               name="Z' (Ω)"
-              domain={zoomDomain ? zoomDomain.x : ['auto', 'auto']}
+              domain={zoomDomain ? zoomDomain.x : xDomain}
               allowDataOverflow
+              tickFormatter={(v: number) => v.toFixed(0)}
               label={compact ? undefined : { value: "Z' (Ohms) — Real Impedance", position: "bottom", offset: 20, fill: "hsl(215 15% 50%)", fontSize: 12 }}
               tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 11 }}
               stroke="hsl(220 15% 20%)"
@@ -187,8 +216,9 @@ const NyquistPlot = ({
               dataKey="y"
               type="number"
               name="-Z'' (Ω)"
-              domain={zoomDomain ? zoomDomain.y : ['auto', 'auto']}
+              domain={zoomDomain ? zoomDomain.y : yDomain}
               allowDataOverflow
+              tickFormatter={(v: number) => v.toFixed(0)}
               label={compact ? undefined : (props: any) => {
                 const { viewBox } = props;
                 const cy = viewBox.y + viewBox.height / 2;
