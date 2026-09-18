@@ -241,9 +241,9 @@ const CNLSFitResults = ({ fit, model, randlesFit, warburg, kk, linKK }: Props) =
             </span>
           </div>
           <div className="grid grid-cols-3 gap-2 text-[10px] font-mono text-muted-foreground">
-            <div>RMS res.: <span className="text-foreground">{linKK.residualRmsPct.toFixed(2)} %</span></div>
-            <div>Max res.: <span className="text-foreground">{linKK.maxResidualPct.toFixed(2)} %</span></div>
-            <div>RC: <span className="text-foreground">{linKK.tauCount}</span></div>
+            <div className="whitespace-nowrap">RMS res.: <span className="text-foreground">{linKK.residualRmsPct.toFixed(2)}%</span></div>
+            <div className="whitespace-nowrap">Max res.: <span className="text-foreground">{linKK.maxResidualPct.toFixed(2)}%</span></div>
+            <div className="whitespace-nowrap">RC: <span className="text-foreground">{linKK.tauCount}</span></div>
           </div>
           {linKK.warnings.length > 0 && (
             <div className="text-[10px] font-mono text-yellow-500 leading-snug">
