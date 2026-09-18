@@ -1,5 +1,5 @@
 import { EmptyPlotState } from "@/components/EmptyPlotState";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea,
@@ -79,11 +79,30 @@ const NyquistPlot = ({
   const fitLine = (fittedCurve ?? []).map(d => ({ x: d.zReal, y: -d.zImag }));
 
   // Nyquist plots only read as a true semicircle when 1 Ω on X spans the
-  // same pixel distance as 1 Ω on Y. Recharts' default ['auto','auto']
-  // domains scale each axis independently off whatever range that data
-  // happens to have, so the same underlying circuit can look flattened or
-  // nicely round from one sweep to the next depending on how much Warburg
-  // tail is present. Force both axes to share one square, centered range.
+  // same PIXEL distance as 1 Ω on Y. Matching the two axes' numeric range
+  // alone isn't enough — this chart's box is rarely square (a wide window
+  // gives far more horizontal pixels than vertical ones), so we measure
+  // the actual rendered plot box and size each axis's Ω span to match its
+  // own pixel share, rather than just giving both axes the same Ω range.
+  const [plotBox, setPlotBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const roRef = useRef<ResizeObserver | null>(null);
+  // A plain useEffect(..., []) only runs once, at first mount — but this
+  // component renders EmptyPlotState (no chart div at all) until the first
+  // sweep produces data, so the ref would still be null when that effect
+  // ran. A callback ref fires every time the node actually attaches (or
+  // detaches), including that later empty→populated transition.
+  const setPlotBoxEl = useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setPlotBox({ w: entry.contentRect.width, h: entry.contentRect.height });
+    });
+    ro.observe(el);
+    roRef.current = ro;
+  }, []);
+
   const { xDomain, yDomain } = useMemo(() => {
     const allPts = [
       ...semiPts, ...warbPts, ...fitLine,
@@ -97,14 +116,38 @@ const NyquistPlot = ({
       if (p.y < yMin) yMin = p.y;
       if (p.y > yMax) yMax = p.y;
     }
-    const span = Math.max(xMax - xMin, yMax - yMin, 1) * 1.1;
+    const dataSpanX = Math.max(xMax - xMin, 1);
+    const dataSpanY = Math.max(yMax - yMin, 1);
     const xCenter = (xMin + xMax) / 2;
     const yCenter = (yMin + yMax) / 2;
+
+    // Approximate the actual plottable area inside the chart's margins and
+    // axis label gutters, so the Ω/pixel ratio we solve for matches reality.
+    const margin = compact
+      ? { top: 8, right: 8, bottom: 8, left: 8 }
+      : { top: 28, right: 24, bottom: 24, left: 48 };
+    const labelGutterX = compact ? 0 : 20; // X axis title
+    const labelGutterY = compact ? 0 : 40; // rotated Y axis title + tick labels
+    const plotW = Math.max(10, plotBox.w - margin.left - margin.right - labelGutterY);
+    const plotH = Math.max(10, plotBox.h - margin.top - margin.bottom - labelGutterX);
+    const aspect = plotBox.w > 0 && plotBox.h > 0 ? plotW / plotH : 1;
+
+    let spanX: number, spanY: number;
+    if (aspect >= dataSpanX / dataSpanY) {
+      // Plot box is relatively wider than the data itself needs — Y is the
+      // limiting axis; stretch X's Ω range to match the box's aspect ratio.
+      spanY = dataSpanY * 1.1;
+      spanX = spanY * aspect;
+    } else {
+      spanX = dataSpanX * 1.1;
+      spanY = spanX / aspect;
+    }
+
     return {
-      xDomain: [xCenter - span / 2, xCenter + span / 2] as [number, number],
-      yDomain: [yCenter - span / 2, yCenter + span / 2] as [number, number],
+      xDomain: [xCenter - spanX / 2, xCenter + spanX / 2] as [number, number],
+      yDomain: [yCenter - spanY / 2, yCenter + spanY / 2] as [number, number],
     };
-  }, [semiPts, warbPts, fitLine, ovs]);
+  }, [semiPts, warbPts, fitLine, ovs, compact, plotBox]);
 
   const [zoomArea, setZoomArea] = useState<{ x1: number; x2: number } | null>(null);
   const [zoomDomain, setZoomDomain] = useState<{ x: [number, number]; y: [number, number] } | null>(null);
@@ -192,7 +235,7 @@ const NyquistPlot = ({
           Reset Zoom
         </button>
       )}
-      <div className="flex-1 min-h-0">
+      <div ref={setPlotBoxEl} className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart
             margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 28, right: 24, bottom: 24, left: 48 }}
