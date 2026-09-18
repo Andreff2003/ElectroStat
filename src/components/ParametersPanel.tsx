@@ -53,7 +53,7 @@ export interface FETParams {
 }
 
 export const DEFAULT_EIS_PARAMS: EISParams = {
-  freqMin: 1,
+  freqMin: 0.1,
   freqMax: 100000,
   points: 60,
   amplitude: 10,
