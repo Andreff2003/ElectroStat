@@ -537,11 +537,11 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
             const modelInfo: Record<string, { name: string; desc: string }> = {
               reversible_diffusion_approx: {
                 name: "Reversible diffusion model",
-                desc: "solves 1-D semi-infinite diffusion with a Nernst surface boundary independently at each forward/reverse half-pulse — the same solver as CV's reversible model, applied per pulse. I_net = I_forward − I_reverse falls out of the physics, never fabricated from a peak shape.",
+                desc: "exact solution of 1-D semi-infinite diffusion with a Nernst surface: each forward/reverse potential step adds a Cottrell response and the history of all earlier steps is carried through. I_net = I_forward − I_reverse falls out of the physics, never fabricated from a peak shape.",
               },
               quasi_reversible_approx: {
                 name: "Quasi-reversible model",
-                desc: "Butler–Volmer kinetics + Cottrell-kernel convolution, same K0/α regime as the CV quasi-reversible model. Educational approximation only — not a full finite-difference solver.",
+                desc: "Butler–Volmer kinetics + Cottrell-kernel convolution with graded sub-steps inside each pulse, same K0/α regime as the CV quasi-reversible model. Educational model, agrees with the reversible one to about 2 % for fast kinetics.",
               },
               empirical_swv_peak_langmuir: {
                 name: "Empirical peak model",

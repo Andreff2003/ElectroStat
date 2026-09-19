@@ -36,5 +36,8 @@ export const CV_SOLVER_DOMAIN_RULE = "L = 6*sqrt(D*tMax)";
  */
 export const CV_BV_K0 = 0.01;    // cm/s — heterogeneous rate constant
 export const CV_BV_ALPHA = 0.5;  // charge-transfer coefficient
-export const CV_BV_K_MAX = 10;   // cm/s — numerical safety ceiling
+// The semi-implicit Butler–Volmer update stays finite for any k, so this only
+// guards overflow. A low ceiling (it was 10 cm/s) breaks Nernst equilibrium away
+// from E0' and made k0 = 10 look irreversible (ΔEp 112 mV instead of ~58).
+export const CV_BV_K_MAX = 1e6;  // cm/s
 

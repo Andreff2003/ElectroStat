@@ -620,6 +620,12 @@ describe("CV simulator accuracy against theory (5 mM, 0.0707 cm², 100 mV/s, n=1
     expect(m.deltaEp).toBeLessThanOrEqual(62);
   });
 
+  it("quasi-reversible at the panel's maximum k0 (10 cm/s) behaves as reversible", () => {
+    const m = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", k0: 10 }));
+    expect(Math.abs(Math.abs(m.IpcCorrected) / ipRandlesSevcikUA - 1)).toBeLessThan(0.02);
+    expect(m.deltaEp).toBeLessThanOrEqual(64);
+  });
+
   it("quasi-reversible results do not depend on the potential step (2 mV vs 0.5 mV)", () => {
     // The quasi model adds Gaussian noise; pin it so peak-location jitter
     // cannot mask (or fake) a step dependence.

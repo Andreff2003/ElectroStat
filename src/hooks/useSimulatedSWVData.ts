@@ -6,23 +6,23 @@
  * Two physical solvers back the SWV mode, mirroring the two CV models:
  *
  *  A) "reversible"      → simulateReversibleDiffusionSWV
- *     1-D semi-infinite diffusion (backward Euler + Thomas tridiagonal
- *     reused from cvDiffusionSolver.ts) with a Nernst surface boundary
- *     condition, applied at each half-pulse of the staircase + square
- *     wave train. INet = IForward − IReverse falls out of the physics.
+ *     Exact solution of planar semi-infinite diffusion with a Nernst
+ *     surface: the response is a sum of Cottrell terms, one per
+ *     potential jump of the staircase + square wave train (no mesh, no
+ *     time stepping). INet = IForward − IReverse falls out of the physics.
  *
  *  B) "quasi-reversible" → simulateQuasiReversibleSWV
- *     Butler–Volmer kinetics + Cottrell-kernel convolution, using the
- *     same K0/α/K_max regime as buildQuasiReversibleCV. Educational
- *     approximation only; NOT a full finite-difference Butler–Volmer
- *     SWV solver.
+ *     Butler–Volmer kinetics + Cottrell-kernel convolution with each
+ *     half-pulse split into graded sub-steps. Same K0/α regime as
+ *     buildQuasiReversibleCV; agrees with (A) to about 2 % for fast
+ *     kinetics. Educational model, not a full finite-difference solver.
  *
  *  C) "empirical"        → legacy Gaussian × Langmuir peak (kept as a
  *     fallback path — model id "empirical_swv_peak_langmuir" — while
  *     the physical solvers are tuned; not the default).
  *
- * Live hardware SWV acquisition on the ESP32 firmware remains
- * unimplemented; this hook only feeds the simulated modes.
+ * This hook only feeds the simulated modes; live SWV runs through the
+ * bridge and the ESP32 firmware (start_swv).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

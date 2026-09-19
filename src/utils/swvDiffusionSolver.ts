@@ -3,13 +3,14 @@
  * SWV — physical solvers (reversible & quasi-reversible)
  * ------------------------------------------------------------
  * Two variants share the staircase + square-wave pulse train
- * produced by `generateSWVProgram`. For each staircase step
- * the potential is evaluated twice — a forward pulse
- * E_forward = E_step + pulseSign · Esw and a reverse pulse
- * E_reverse = E_step − pulseSign · Esw — each advanced by
- * dt_half = 1/(2·frequency_Hz). The differential current
- * INet = IForward − IReverse falls out of the simulation, it
- * is never fabricated from a peak shape.
+ * produced by `generateSWVProgram`. Every staircase step applies a
+ * forward pulse E_forward = E_step + pulseSign · Esw for
+ * dt_half = 1/(2·frequency_Hz), then a reverse pulse
+ * E_reverse = E_step − pulseSign · Esw for another dt_half. The
+ * current is sampled at the END of each half-pulse and
+ * INet = IForward − IReverse falls out of the simulation, it is
+ * never fabricated from a peak shape. The potential is held at the
+ * first staircase value during `quietTime_s` before the train starts.
  *
  * `pulseSign` follows the scan direction: for an anodic ramp
  * (endE > startE) the forward pulse steps toward more positive
@@ -17,21 +18,24 @@
  * the "IForward at the end of the forward pulse" convention
  * documented in src/types/swv.ts.
  *
- *  A) Reversible variant — 1-D semi-infinite diffusion (backward
- *     Euler + Thomas tridiagonal via `solveTridiagonal` reused
- *     from cvDiffusionSolver.ts) with a Nernst surface boundary
- *     condition CO(0)/CR(0) = exp(nF(E − E0')/RT). Faradaic
- *     current from the diffusive flux of O at the surface,
- *     I = nFA·J_O with J_O = −D·(CO[1] − CO[0])/dx.
+ * Both variants model planar semi-infinite diffusion with equal
+ * D for O and R, starting from uniform bulk O.
  *
- *  B) Quasi-reversible variant — Butler–Volmer kinetics plus a
- *     semi-infinite diffusion approximation via
- *     product-integration of the Cottrell kernel, solved
- *     semi-implicitly per half-pulse. Same K0/α/K_max regime as
- *     `buildQuasiReversibleCV`. Educational approximation only;
- *     NOT a full finite-difference Butler–Volmer solver — the
- *     Cottrell-kernel convolution assumes a semi-infinite
- *     planar geometry with equal D for O and R.
+ *  A) Reversible — exact. With a Nernstian surface the surface
+ *     concentration of R is a known piecewise-constant function of
+ *     time, a(t) = 1/(1 + e^{nF(E(t) − E0')/RT}) · C*, so each
+ *     potential jump Δa_k at time t_k adds a Cottrell response and
+ *       I(t) = −nFA·C*·√(D/π) · Σ_{t_k < t} Δa_k / √(t − t_k).
+ *     No mesh and no time stepping, hence no discretisation error.
+ *
+ *  B) Quasi-reversible — Butler–Volmer kinetics with the same
+ *     Cottrell-kernel convolution as `buildQuasiReversibleCV`, but
+ *     each half-pulse is split into `K` sub-steps on a Chebyshev-
+ *     spaced grid (dense right after the potential jump, where the
+ *     1/√t transient is steep, and at the sampling instant).
+ *     A single step per half-pulse overestimates a fresh Cottrell
+ *     transient by 57 %. Accuracy is set by K and is checked against
+ *     the exact reversible solution in the tests.
  *
  * Sign convention (kept consistent with the rest of the app):
  *   anodic current   → positive
@@ -50,13 +54,8 @@ import {
   CV_BV_ALPHA,
   CV_BV_K_MAX,
 } from "./cvConstants";
-import { solveTridiagonal } from "./cvDiffusionSolver";
 import { generateSWVProgram } from "./swvMetrics";
 import type { SWVDataPoint, SWVParameters } from "@/types/swv";
-
-// Fixed at the mesh size the SWV results were produced with; independent of
-// the CV mesh so tightening that one does not silently change SWV numbers.
-const SWV_SPATIAL_NODES = 180;
 
 const safeExp = (x: number) => Math.exp(Math.max(-60, Math.min(60, x)));
 const clamp = (x: number, lo: number, hi: number) =>
@@ -121,7 +120,8 @@ function emptyPoint(
   };
 }
 
-// ────────────────── reversible ──────────────────
+
+// ────────────────── reversible (exact) ──────────────────
 
 export function simulateReversibleDiffusionSWV(
   params: SWVParameters,
@@ -131,78 +131,41 @@ export function simulateReversibleDiffusionSWV(
   const prog = generateSWVProgram(params);
   const { D, E0, T, n, A, cBulk, Esw, dtHalf, pulseSign } = r;
 
-  const out: SWVDataPoint[] = [];
   if (cBulk <= 0) {
     return prog.map((s) => emptyPoint(s.E, s.time, s.index, s.direction));
   }
 
-  // Total time budget for the semi-infinite mesh L ≈ 6·√(D·tMax).
-  const tMax = Math.max(
-    prog.length * 2 * dtHalf + (params.quietTime_s ?? 0),
-    dtHalf,
-  );
-  const N = Math.max(20, Math.floor(SWV_SPATIAL_NODES));
-  const L = 6 * Math.sqrt(D * tMax);
-  const dx = L / (N - 1);
-  const lambda = (D * dtHalf) / (dx * dx);
+  const nf = (n * CV_F) / (CV_R * T);
+  // Surface concentration of R as a fraction of the bulk O concentration.
+  const surfaceR = (E: number) => 1 / (1 + safeExp(nf * (E - E0)));
 
-  const CO = new Array<number>(N).fill(cBulk);
-  const CR = new Array<number>(N).fill(0);
+  // Potential jumps: times and the change in surface R fraction at each.
+  const jumpT: number[] = [];
+  const jumpDa: number[] = [];
+  let aPrev = 0;
+  const jump = (t: number, a: number) => {
+    jumpT.push(t);
+    jumpDa.push(a - aPrev);
+    aPrev = a;
+  };
+  const quiet = Math.max(0, params.quietTime_s ?? 0);
+  if (quiet > 0) jump(0, surfaceR(prog[0].E));
 
-  const M = N - 2;
-  const a = new Array<number>(M).fill(-lambda);
-  const b = new Array<number>(M).fill(1 + 2 * lambda);
-  const c = new Array<number>(M).fill(-lambda);
-  a[0] = 0;
-  c[M - 1] = 0;
-
-  const solveHalfPulse = (Epulse: number): number => {
-    const theta = safeExp((n * CV_F * (Epulse - E0)) / (CV_R * T));
-
-    // Impose Nernst BC using local mass conservation with the neighbour.
-    const surfTot0 = clamp(CO[1] + CR[1], 0, cBulk);
-    CO[0] = (surfTot0 * theta) / (1 + theta);
-    CR[0] = surfTot0 / (1 + theta);
-
-    if (M >= 1) {
-      const dO = new Array<number>(M);
-      const dR = new Array<number>(M);
-      for (let i = 0; i < M; i++) {
-        const idx = i + 1;
-        dO[i] = CO[idx];
-        dR[i] = CR[idx];
-        if (i === 0) {
-          dO[i] += lambda * CO[0];
-          dR[i] += lambda * CR[0];
-        }
-        if (i === M - 1) {
-          dO[i] += lambda * cBulk;
-          dR[i] += lambda * 0;
-        }
-      }
-      const xO = solveTridiagonal(a, b, c, dO);
-      const xR = solveTridiagonal(a, b, c, dR);
-      for (let i = 0; i < M; i++) {
-        CO[i + 1] = Math.max(0, xO[i]);
-        CR[i + 1] = Math.max(0, xR[i]);
-      }
-    }
-    CO[N - 1] = cBulk;
-    CR[N - 1] = 0;
-
-    const surfTot1 = clamp(CO[1] + CR[1], 0, cBulk);
-    CO[0] = (surfTot1 * theta) / (1 + theta);
-    CR[0] = surfTot1 / (1 + theta);
-
-    const J_O = (-D * (CO[1] - CO[0])) / dx;
-    return n * CV_F * A * J_O * 1e6; // µA
+  // I(t) = −nFA·C*·√(D/π)·Σ Δa_k/√(t − t_k), in µA (anodic +).
+  const prefactor = -n * CV_F * A * cBulk * Math.sqrt(D / Math.PI) * 1e6;
+  const currentAt = (t: number) => {
+    let sum = 0;
+    for (let k = 0; k < jumpT.length; k++) sum += jumpDa[k] / Math.sqrt(t - jumpT[k]);
+    return prefactor * sum;
   };
 
+  const out: SWVDataPoint[] = [];
   for (const s of prog) {
-    const Ef = s.E + pulseSign * Esw;
-    const Er = s.E - pulseSign * Esw;
-    const iForward = solveHalfPulse(Ef);
-    const iReverse = solveHalfPulse(Er);
+    const tForward = s.time;
+    jump(tForward, surfaceR(s.E + pulseSign * Esw));
+    const iForward = currentAt(tForward + dtHalf);
+    jump(tForward + dtHalf, surfaceR(s.E - pulseSign * Esw));
+    const iReverse = currentAt(tForward + 2 * dtHalf);
     out.push({
       E: s.E,
       IForward: iForward,
@@ -218,6 +181,19 @@ export function simulateReversibleDiffusionSWV(
 
 // ────────────────── quasi-reversible ──────────────────
 
+/** Chebyshev-spaced sub-step boundaries on [0, 1]: dense at both ends. */
+function pulseGrid(K: number): number[] {
+  const g = new Array<number>(K + 1);
+  for (let j = 0; j <= K; j++) g[j] = 0.5 * (1 - Math.cos((Math.PI * j) / K));
+  return g;
+}
+
+// The history convolution costs O(n²) in the number of sub-steps n, so the
+// sub-steps per half-pulse shrink for long programs instead of freezing the page.
+const QUASI_SUBSTEP_BUDGET = 10000;
+const QUASI_MAX_SUBSTEPS_PER_PULSE = 24;
+const QUASI_MIN_SUBSTEPS_PER_PULSE = 4;
+
 export function simulateQuasiReversibleSWV(
   params: SWVParameters,
 ): SWVDataPoint[] {
@@ -230,12 +206,36 @@ export function simulateQuasiReversibleSWV(
     return prog.map((s) => emptyPoint(s.E, s.time, s.index, s.direction));
   }
 
-  const sqrtPiD = Math.sqrt(Math.PI * D);
-  const sqrtDt = Math.sqrt(dtHalf);
-  const Afac = n * CV_F * A;
-  const beta = (2 * sqrtDt) / (Afac * sqrtPiD);
+  const quiet = Math.max(0, params.quietTime_s ?? 0);
+  const halfPulses = 2 * prog.length + (quiet > 0 ? 1 : 0);
+  const K = clamp(
+    Math.floor(QUASI_SUBSTEP_BUDGET / halfPulses),
+    QUASI_MIN_SUBSTEPS_PER_PULSE,
+    QUASI_MAX_SUBSTEPS_PER_PULSE,
+  );
+  const grid = pulseGrid(K);
 
-  // Butler–Volmer rate coefficients — same regime as buildQuasiReversibleCV.
+  // Sub-step boundaries (absolute time), the potential of each sub-step, and
+  // the sub-step that ends each half-pulse (where the current is sampled).
+  const tb: number[] = [0];
+  const Epot: number[] = [];
+  const addHalfPulse = (t0: number, duration: number, E: number) => {
+    for (let j = 1; j <= K; j++) {
+      tb.push(t0 + duration * grid[j]);
+      Epot.push(E);
+    }
+    return Epot.length - 1;
+  };
+  if (quiet > 0) addHalfPulse(0, quiet, prog[0].E);
+  const forwardEnd: number[] = [];
+  const reverseEnd: number[] = [];
+  for (const s of prog) {
+    forwardEnd.push(addHalfPulse(s.time, dtHalf, s.E + pulseSign * Esw));
+    reverseEnd.push(addHalfPulse(s.time + dtHalf, dtHalf, s.E - pulseSign * Esw));
+  }
+
+  const Afac = n * CV_F * A;
+  const pref = 1 / (Afac * Math.sqrt(Math.PI * D));
   const rate = (E: number) => {
     const eta = E - E0;
     const kRed = Math.min(
@@ -249,52 +249,40 @@ export function simulateQuasiReversibleSWV(
     return { kRed, kOx };
   };
 
-  // History of currents at each half-pulse, in amperes — indexed 0..k-1
-  // when computing the k-th half-pulse. Both forward and reverse pulses
-  // are separate points feeding the next step's convolution.
-  const Iamps: number[] = [];
+  // Piecewise-constant current per sub-step (A). The surface concentration of
+  // R at the end of sub-step i follows from the Cottrell kernel:
+  //   CR_i = −pref · Σ_m I_m · 2(√(t_i − t_m) − √(t_i − t_{m+1})),
+  // where the m = i term is the unknown current itself.
+  const nSub = Epot.length;
+  const I = new Float64Array(nSub);
+  const S = new Float64Array(nSub + 1);
+  for (let i = 0; i < nSub; i++) {
+    const tEnd = tb[i + 1];
+    for (let m = 0; m <= i; m++) S[m] = Math.sqrt(tEnd - tb[m]);
+    let hist = 0;
+    for (let m = 0; m < i; m++) hist += I[m] * (S[m] - S[m + 1]);
+    hist *= 2 * pref;
+    const beta = 2 * S[i] * pref;
 
-  // Cottrell product-integration weights 2·(√k − √(k−1)) depend only on the
-  // lag k — precompute them instead of two sqrt calls per inner iteration.
-  // Two half-pulses are pushed per staircase step, hence the 2× sizing.
-  const maxHistory = 2 * prog.length + 1;
-  const cottrellW = new Float64Array(maxHistory + 1);
-  for (let k = 1; k <= maxHistory; k++) {
-    cottrellW[k] = 2 * (Math.sqrt(k) - Math.sqrt(k - 1));
-  }
-
-  const solveHalfPulse = (Epulse: number): number => {
-    const { kRed, kOx } = rate(Epulse);
-
-    let sumHist = 0;
-    for (let j = 0; j < Iamps.length; j++) {
-      sumHist += Iamps[j] * cottrellW[Iamps.length - j];
-    }
-    const convKnown = (sumHist * sqrtDt) / (Afac * sqrtPiD);
-
+    const { kRed, kOx } = rate(Epot[i]);
     const denom = 1 + Afac * beta * (kOx + kRed);
-    let Iamp = -Afac * (kRed * cBulk + (kOx + kRed) * convKnown) / denom;
+    let Iamp = (-Afac * (kRed * cBulk + (kOx + kRed) * hist)) / denom;
 
     // Mass-balance clamp — same fallback as buildQuasiReversibleCV.
-    const CR_raw = -(convKnown + beta * Iamp);
+    const CR_raw = -(hist + beta * Iamp);
     const thetaR = clamp(CR_raw / cBulk, 0, 1);
     const CR = thetaR * cBulk;
     const CO = cBulk - CR;
     if (thetaR <= 0 || thetaR >= 1) {
       Iamp = Afac * (kOx * CR - kRed * CO);
     }
+    I[i] = Iamp;
+  }
 
-    Iamps.push(Iamp);
-    return Iamp * 1e6; // µA
-  };
-
-  const out: SWVDataPoint[] = [];
-  for (const s of prog) {
-    const Ef = s.E + pulseSign * Esw;
-    const Er = s.E - pulseSign * Esw;
-    const iForward = solveHalfPulse(Ef);
-    const iReverse = solveHalfPulse(Er);
-    out.push({
+  return prog.map((s, i) => {
+    const iForward = I[forwardEnd[i]] * 1e6;
+    const iReverse = I[reverseEnd[i]] * 1e6;
+    return {
       E: s.E,
       IForward: iForward,
       IReverse: iReverse,
@@ -302,7 +290,6 @@ export function simulateQuasiReversibleSWV(
       time: s.time,
       index: s.index,
       direction: s.direction,
-    });
-  }
-  return out;
+    };
+  });
 }

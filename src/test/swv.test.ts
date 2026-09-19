@@ -291,6 +291,67 @@ describe("SWV physical solvers — reversible vs quasi-reversible", () => {
   });
 });
 
+describe("SWV solver accuracy against theory", () => {
+  const F = 96485.33, D = 7.26e-6, A = 0.0707, C = 5e-6;
+  const cottrellStepUA = (t: number) => -F * A * C * Math.sqrt(D / (Math.PI * t)) * 1e6;
+  // Potentials far below E0' keep the surface fully reduced: pure Cottrell decay.
+  const cottrellParams: SWVParameters = {
+    ...physicalParams, startE: -0.5, endE: -0.4, amplitude_mV: 0, cMM: 5,
+  };
+  // Window around E0' (0.22 V) where the Butler–Volmer rates stay moderate.
+  const windowParams: SWVParameters = {
+    ...physicalParams, startE: 0.05, endE: 0.4, cMM: 5,
+  };
+
+  it("reversible: first pulse reproduces the Cottrell current exactly", () => {
+    const tp = 1 / (2 * cottrellParams.frequency_Hz);
+    const pts = simulateReversibleDiffusionSWV(cottrellParams);
+    expect(Math.abs(pts[0].IForward / cottrellStepUA(tp) - 1)).toBeLessThan(1e-6);
+    expect(Math.abs(pts[0].IReverse / cottrellStepUA(2 * tp) - 1)).toBeLessThan(1e-6);
+  });
+
+  it("quasi-reversible: Cottrell transient within 3 % (sub-stepped pulses)", () => {
+    const tp = 1 / (2 * cottrellParams.frequency_Hz);
+    const pts = simulateQuasiReversibleSWV({ ...cottrellParams, k0: 10 });
+    expect(Math.abs(pts[0].IForward / cottrellStepUA(tp) - 1)).toBeLessThan(0.03);
+    expect(Math.abs(pts[0].IReverse / cottrellStepUA(2 * tp) - 1)).toBeLessThan(0.03);
+  });
+
+  it("quasi-reversible with fast kinetics matches the exact reversible peak within 4 %", () => {
+    const rev = peakOf(simulateReversibleDiffusionSWV(windowParams));
+    // k0 = 10 cm/s is the panel maximum: it must behave as reversible, not as a
+    // sluggish couple (a low rate ceiling once cut the peak by 45 %).
+    for (const k0 of [1, 10]) {
+      const qr = peakOf(simulateQuasiReversibleSWV({ ...windowParams, k0 }));
+      expect(Math.abs(qr.I / rev.I - 1)).toBeLessThan(0.04);
+      expect(Math.abs(qr.E - rev.E)).toBeLessThanOrEqual(0.004);
+    }
+  });
+
+  it("reversible peak is linear in concentration and follows √f", () => {
+    const base = peakOf(simulateReversibleDiffusionSWV(windowParams));
+    const double = peakOf(simulateReversibleDiffusionSWV({ ...windowParams, cMM: 10 }));
+    expect(double.I / base.I).toBeCloseTo(2, 6);
+    const fast = peakOf(simulateReversibleDiffusionSWV({ ...windowParams, frequency_Hz: 100 }));
+    expect(Math.abs(fast.I / base.I / 2 - 1)).toBeLessThan(0.02);
+  });
+
+  it("reversible peak sits at E0' and a quiet time barely changes it", () => {
+    const quiet0 = peakOf(simulateReversibleDiffusionSWV(windowParams));
+    const quiet2 = peakOf(simulateReversibleDiffusionSWV({ ...windowParams, quietTime_s: 2 }));
+    expect(Math.abs(quiet0.E - 0.22)).toBeLessThanOrEqual(0.006);
+    expect(Math.abs(quiet2.I / quiet0.I - 1)).toBeLessThan(0.01);
+  });
+
+  it("long programs stay fast: 400 steps with the quasi model in under 4 s", () => {
+    const t0 = performance.now();
+    const pts = simulateQuasiReversibleSWV({ ...windowParams, startE: -0.2, endE: 0.6, step_mV: 2 });
+    expect(pts.length).toBe(401);
+    expect(pts.every((p) => Number.isFinite(p.INet))).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(4000);
+  });
+});
+
 describe("SWV calibration — linear fit, LOD/LOQ", () => {
   // The default/demo SWV simulator model is diffusion-controlled (same
   // physics family as CV — see the header comment in
