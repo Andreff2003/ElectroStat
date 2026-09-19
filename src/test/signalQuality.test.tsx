@@ -91,7 +91,7 @@ describe("SignalQuality — SWV lists only the criteria that drive the light", (
   const raw = simulateReversibleDiffusionSWV(params);
   const { metrics } = analyzeSWV(raw, "auto");
 
-  it("shows peak, SNR and points, and not the system descriptors", () => {
+  it("shows peak, SNR and scan resolution, and not the system descriptors", () => {
     render(
       <SignalQuality
         mode="swv"
@@ -105,8 +105,35 @@ describe("SignalQuality — SWV lists only the criteria that drive the light", (
     expect(screen.getByText("Good Signal")).toBeInTheDocument();
     expect(screen.getByText("Peak detected")).toBeInTheDocument();
     expect(screen.getByText("SNR")).toBeInTheDocument();
-    expect(screen.getByText("Points")).toBeInTheDocument();
+    expect(screen.getByText("Scan Resolution")).toBeInTheDocument();
+    expect(screen.queryByText("Points")).toBeNull();
     expect(screen.queryByText("Half-peak width")).toBeNull();
     expect(screen.queryByText("Baseline stability")).toBeNull();
+  });
+});
+
+describe("SignalQuality — SWV scan resolution follows the staircase step", () => {
+  const mk = (step_mV: number) => {
+    const raw = simulateReversibleDiffusionSWV({
+      startE: -0.2, endE: 0.6, step_mV, amplitude_mV: 25, frequency_Hz: 25,
+      quietTime_s: 1, direction: "anodic", baselineMethod: "auto",
+      cMM: 5, nElectrons: 1, area_cm2: 0.0707,
+    });
+    return { raw, metrics: analyzeSWV(raw, "auto").metrics };
+  };
+  const overall = (step: number) => {
+    const { raw, metrics } = mk(step);
+    const { container, unmount } = render(
+      <SignalQuality mode="swv" eisData={[]} fetBaseline={[]} fetAnalyte={[]} swvData={raw} swvMetrics={metrics} />,
+    );
+    const label = container.querySelector('[role="img"]')?.getAttribute("aria-label");
+    unmount();
+    return label;
+  };
+
+  it("fine step is good, ~20 mV step is acceptable, 50 mV step is poor", () => {
+    expect(overall(4)).toContain("good");
+    expect(overall(20)).toContain("acceptable");
+    expect(overall(50)).toContain("poor");
   });
 });

@@ -369,15 +369,18 @@ function computeSWVMetrics(
       ready: false,
       peakDetected: false,
       snr: null as number | null,
-      totalPoints: data?.length ?? 0,
+      stepMv: null as number | null,
+      pointsAcrossPeak: null as number | null,
       peakLevel: "idle" as Level,
       snrLevel: "idle" as Level,
-      pointsLevel: "idle" as Level,
+      resolutionLevel: "idle" as Level,
     };
   }
   const peak = metrics.peakDetected;
   const snr = metrics.snr ?? null;
-  const n = data.length;
+  const stepMv = estimateCVStepMv(data);
+  const hw = metrics.halfPeakWidth_mV ?? null;
+  const pointsAcrossPeak = stepMv != null && hw != null && hw > 0 ? hw / stepMv : null;
 
   const peakLevel: Level =
     peak && (snr ?? 0) >= 10
@@ -387,20 +390,31 @@ function computeSWVMetrics(
         : "red";
   const snrLevel: Level =
     snr == null ? (peak ? "yellow" : "red") : snr >= 10 ? "green" : snr >= 3 ? "yellow" : "red";
-  const pointsLevel: Level = n >= 50 ? "green" : n >= 20 ? "yellow" : "red";
+  // Scan resolution: staircase step against the measured half-peak width. With
+  // fewer than ~5 points across the peak, Ep and the peak height are quantised
+  // by the step (at 50 mV steps Ep moved 30 mV in the simulator).
+  const resolutionLevel: Level =
+    pointsAcrossPeak == null
+      ? "idle"
+      : pointsAcrossPeak >= 10
+        ? "green"
+        : pointsAcrossPeak >= 5
+          ? "yellow"
+          : "red";
 
   // Half-peak width and noise-to-peak describe the redox system / repeat the SNR,
-  // so they are not part of the light (width stays in the SWV metrics grid).
-  const level = worstOf([peakLevel, snrLevel, pointsLevel]);
+  // so they do not score the light (width stays in the SWV metrics grid).
+  const level = worstOf([peakLevel, snrLevel, resolutionLevel]);
   return {
     level,
     ready: true,
     peakDetected: peak,
     snr,
-    totalPoints: n,
+    stepMv,
+    pointsAcrossPeak,
     peakLevel,
     snrLevel,
-    pointsLevel,
+    resolutionLevel,
   };
 }
 
@@ -631,10 +645,14 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
               level={swvQuality.snrLevel}
             />
             <MetricRow
-              label="Points"
-              title="Number of samples in this sweep — more points make peak/noise estimates more reliable. ≥50 green, 20–49 yellow, fewer than 20 red."
-              value={`${swvQuality.totalPoints}`}
-              level={swvQuality.pointsLevel}
+              label="Scan Resolution"
+              title="Staircase step against the measured half-peak width. ≥10 points across the peak green, ≥5 yellow, fewer red: with too coarse a step the peak potential and height are quantised by the step."
+              value={
+                swvQuality.stepMv != null && swvQuality.pointsAcrossPeak != null
+                  ? `${swvQuality.stepMv.toFixed(swvQuality.stepMv < 10 ? 1 : 0)} mV step · ${swvQuality.pointsAcrossPeak.toFixed(0)} pts/peak`
+                  : ready ? "—" : pending
+              }
+              level={swvQuality.resolutionLevel}
             />
             {rangeInfo.anyFlagPresent && (
               <MetricRow

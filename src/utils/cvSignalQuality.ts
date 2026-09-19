@@ -1,5 +1,4 @@
 import type { CVMetrics } from "@/utils/computeCVMetrics";
-import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 
 export type CVQualityLevel = "green" | "yellow" | "red" | "idle";
 
@@ -18,8 +17,13 @@ export interface CVQualityOptions {
   n?: number;
 }
 
-/** Median potential increment along a scan, ignoring the jumps at vertices. */
-export function estimateCVStepMv(data: CVDataPoint[] | undefined | null): number | null {
+/**
+ * Median potential increment along a scan, ignoring the jumps at vertices.
+ * Works for any point list with an `E` (V) and an optional `cycle` (SWV has none).
+ */
+export function estimateCVStepMv(
+  data: { E: number; cycle?: number }[] | undefined | null,
+): number | null {
   if (!data || data.length < 3) return null;
   const steps: number[] = [];
   for (let i = 1; i < data.length; i++) {
