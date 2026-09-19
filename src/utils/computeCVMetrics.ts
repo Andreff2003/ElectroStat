@@ -49,7 +49,7 @@ export interface CVMetrics {
   D_valid: boolean;
   D_status: DStatus;
   /** Which corrected peak(s) were fed into the Randles-Ševčík expression. */
-  D_peak_source?: "anodic" | "cathodic" | "mean_anodic_cathodic" | "none";
+  D_peak_source?: "anodic" | "cathodic" | "none";
   reversibility: CVReversibility;
   baselineMethod: BaselineMethod;
   baselineMethodInput: BaselineMethodInput;
@@ -395,26 +395,28 @@ export function computeCVMetrics(
   const vVs = input.scanRate_mVs / 1000;
   let D_apparent = NaN;
   let D_valid = false;
-  let D_peak_source: "anodic" | "cathodic" | "mean_anodic_cathodic" | "none" = "none";
+  let D_peak_source: "anodic" | "cathodic" | "none" = "none";
   if (
     input.n > 0 &&
     input.areaCm2 > 0 &&
     cBulk > 0 &&
     vVs > 0
   ) {
-    // Prefer the mean of |Ipa| and |Ipc| when both anodic and cathodic
-    // peaks exist and the ratio is within a reasonable reversible window
-    // (0.8–1.25). This is more robust against single-peak baseline noise
-    // than picking only the anodic branch.
+    // Randles–Ševčík describes the peak of the FIRST sweep, which rises from a
+    // flat baseline. The second peak sits on the decaying tail of the first
+    // one and its baseline has to be extrapolated, which under-reads it by
+    // ~5 % even on ideal data (that bias carried straight into D). So use the
+    // first-sweep peak when it exists and the couple looks reversible-ish
+    // (ratio 0.8–1.25); otherwise fall back to whichever peak exists.
     let ipaUseMicroA: number | null = null;
-    if (hasAnodic && hasCathodic) {
+    const firstIsAnodic = goesPositive;
+    const firstDetected = firstIsAnodic ? hasAnodic : hasCathodic;
+    const firstPeak = firstIsAnodic ? IpaCorrected : Math.abs(IpcCorrected);
+    if (hasAnodic && hasCathodic && firstDetected && firstPeak > 0) {
       const ratio = Math.abs(IpaCorrected / IpcCorrected);
-      if (
-        Number.isFinite(ratio) && ratio >= 0.8 && ratio <= 1.25 &&
-        IpaCorrected > 0 && Math.abs(IpcCorrected) > 0
-      ) {
-        ipaUseMicroA = 0.5 * (Math.abs(IpaCorrected) + Math.abs(IpcCorrected));
-        D_peak_source = "mean_anodic_cathodic";
+      if (Number.isFinite(ratio) && ratio >= 0.8 && ratio <= 1.25) {
+        ipaUseMicroA = firstPeak;
+        D_peak_source = firstIsAnodic ? "anodic" : "cathodic";
       }
     }
     if (ipaUseMicroA == null && hasAnodic && IpaCorrected > 0) {

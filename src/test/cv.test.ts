@@ -613,6 +613,18 @@ describe("CV simulator accuracy against theory (5 mM, 0.0707 cm², 100 mV/s, n=1
     expect(Math.abs(m.deltaEp - 57)).toBeLessThanOrEqual(4);
   });
 
+  it("D apparent recovers the input D within 2 % using the first-sweep peak", () => {
+    const m = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "reversible" }));
+    expect(m.D_peak_source).toBe("cathodic");
+    expect(Math.abs(m.D_apparent / CV_DEFAULT_D_CM2_S - 1)).toBeLessThan(0.02);
+  });
+
+  it("an anodic-first scan takes D from the anodic peak", () => {
+    const data = makeReversibleCurve({ cMM: 5, ipUA: 80, direction: "anodic-first" });
+    const m = computeCVMetrics(data, { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: 0.0707 })!;
+    expect(m.D_peak_source).toBe("anodic");
+  });
+
   it("quasi-reversible with fast kinetics converges to the reversible response", () => {
     const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", k0: 1 });
     const m = metricsFor(pts);
