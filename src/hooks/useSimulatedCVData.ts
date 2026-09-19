@@ -220,8 +220,8 @@ function buildQuasiReversibleCV(params: CVSimParams): CVDataPoint[] {
   // iteration. The convolution itself is still O(n²) — the kernel decays as
   // 1/√k and truncating it would change the physics — so dense sweeps remain
   // expensive; the parameters panel warns before that becomes noticeable.
-  const cottrellW = new Float64Array(segs.length + 1);
-  for (let k = 1; k <= segs.length; k++) {
+  const cottrellW = new Float64Array(segs.length + 2);
+  for (let k = 1; k <= segs.length + 1; k++) {
     cottrellW[k] = 2 * (Math.sqrt(k) - Math.sqrt(k - 1));
   }
 
@@ -233,7 +233,8 @@ function buildQuasiReversibleCV(params: CVSimParams): CVDataPoint[] {
 
     let sumHist = 0;
     for (let j = 0; j < i; j++) {
-      sumHist += Iamps[j] * cottrellW[i - j];
+      // The current step already carries lag 1 (inside beta), so step j sits at lag i−j+1.
+      sumHist += Iamps[j] * cottrellW[i - j + 1];
     }
     const convKnown = (sumHist * sqrtDt) / (Afac * sqrtPiD);
 
@@ -325,14 +326,13 @@ export function useSimulatedCVData(speed: number = 40) {
         return;
       }
       const batch = Math.max(1, Math.floor(allRef.current.length / 200));
-      setData((prev) => {
-        const next = prev.slice();
-        for (let k = 0; k < batch && idxRef.current < allRef.current.length; k++) {
-          next.push(allRef.current[idxRef.current]);
-          idxRef.current++;
-        }
-        return next;
-      });
+      // Advance the cursor here, not inside the state updater: React may call
+      // an updater twice (StrictMode), which would skip every other batch.
+      const start = idxRef.current;
+      const end = Math.min(start + batch, allRef.current.length);
+      idxRef.current = end;
+      const chunk = allRef.current.slice(start, end);
+      setData((prev) => prev.concat(chunk));
     }, speed);
     return () => clearInterval(interval);
   }, [isRunning, speed]);

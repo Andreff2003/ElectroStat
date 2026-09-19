@@ -3028,6 +3028,7 @@ const Index = () => {
                 fetBaseline={[]}
                 fetAnalyte={[]}
                 cvMetrics={cvMetrics}
+                cvNElectrons={cvParams.n}
                 cvData={cvDataLive}
               />
               <MeasurementNotesPanel

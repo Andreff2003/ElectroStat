@@ -35,7 +35,7 @@ const baseCVExport = {
 describe("CV solver constants are centralised", () => {
   it("solver defaults are exported and match expected values", () => {
     expect(CV_SOLVER_DEFAULT_STEP_V).toBe(0.002);
-    expect(CV_SOLVER_DEFAULT_SPATIAL_NODES).toBe(180);
+    expect(CV_SOLVER_DEFAULT_SPATIAL_NODES).toBe(2500);
     expect(CV_SOLVER_DOMAIN_RULE).toContain("sqrt");
   });
 });

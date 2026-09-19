@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { computeCVMetrics } from "@/utils/computeCVMetrics";
 import {
   buildCVCalibrationPoint,
@@ -17,7 +17,7 @@ import {
   type CVDataPoint,
 } from "@/hooks/useSimulatedCVData";
 import { buildCVExportText } from "@/utils/csvExport";
-import { computeCVSignalQuality } from "@/utils/cvSignalQuality";
+import { computeCVSignalQuality, estimateCVStepMv } from "@/utils/cvSignalQuality";
 import { simulateReversibleDiffusionCV } from "@/utils/cvDiffusionSolver";
 import { CV_F, CV_R, CV_T_DEFAULT_K } from "@/utils/cvConstants";
 
@@ -593,5 +593,94 @@ describe("simulateReversibleDiffusionCV — physical solver", () => {
     const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible" });
     expect(pts.length).toBeGreaterThan(50);
     for (const p of pts) expect(Number.isFinite(p.I)).toBe(true);
+  });
+});
+
+// ───────────────────── simulator accuracy vs. theory ─────────────────────
+
+describe("CV simulator accuracy against theory (5 mM, 0.0707 cm², 100 mV/s, n=1)", () => {
+  const A = 0.0707;
+  const metricsFor = (pts: CVDataPoint[]) =>
+    computeCVMetrics(pts, { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: A })!;
+  const ipRandlesSevcikUA =
+    0.4463 * CV_F * A * 5e-6 *
+    Math.sqrt((CV_F * 0.1 * CV_DEFAULT_D_CM2_S) / (CV_R * CV_T_DEFAULT_K)) * 1e6;
+
+  it("reversible: cathodic peak within 1.5% of Randles–Ševčík and ΔEp within 4 mV of 57 mV", () => {
+    const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "reversible" });
+    const m = metricsFor(pts);
+    expect(Math.abs(Math.abs(m.IpcCorrected) / ipRandlesSevcikUA - 1)).toBeLessThan(0.015);
+    expect(Math.abs(m.deltaEp - 57)).toBeLessThanOrEqual(4);
+  });
+
+  it("quasi-reversible with fast kinetics converges to the reversible response", () => {
+    const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", k0: 1 });
+    const m = metricsFor(pts);
+    expect(Math.abs(Math.abs(m.IpcCorrected) / ipRandlesSevcikUA - 1)).toBeLessThan(0.02);
+    expect(m.deltaEp).toBeLessThanOrEqual(62);
+  });
+
+  it("quasi-reversible results do not depend on the potential step (2 mV vs 0.5 mV)", () => {
+    // The quasi model adds Gaussian noise; pin it so peak-location jitter
+    // cannot mask (or fake) a step dependence.
+    const rnd = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const fine = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", stepPotential: 0.5 }));
+      const coarse = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", stepPotential: 2 }));
+      expect(Math.abs(coarse.IpcCorrected / fine.IpcCorrected - 1)).toBeLessThan(0.01);
+      expect(Math.abs(coarse.deltaEp - fine.deltaEp)).toBeLessThanOrEqual(3);
+    } finally {
+      rnd.mockRestore();
+    }
+  });
+
+  it("quasi-reversible ΔEp follows Nicholson's working curve (ψ = k0/√(π·D·f·v))", () => {
+    const f = CV_F / (CV_R * CV_T_DEFAULT_K);
+    const cases: { k0: number; nicholson: number; tol: number }[] = [
+      { k0: 0.01, nicholson: 84, tol: 4 },    // ψ ≈ 1.06
+      { k0: 0.003, nicholson: 127, tol: 8 },  // ψ ≈ 0.32
+      { k0: 0.001, nicholson: 212, tol: 12 }, // ψ ≈ 0.11
+    ];
+    for (const c of cases) {
+      const psi = c.k0 / Math.sqrt(Math.PI * CV_DEFAULT_D_CM2_S * f * 0.1);
+      expect(psi).toBeGreaterThan(0.05);
+      const m = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible", k0: c.k0 }));
+      expect(Math.abs(m.deltaEp - c.nicholson)).toBeLessThanOrEqual(c.tol);
+    }
+  });
+});
+
+describe("CV scan resolution criterion", () => {
+  const metrics = computeCVMetrics(
+    buildCVPointsForTest({ ...DEFAULT_CV_PARAMS }),
+    { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: 0.0707 },
+  )!;
+
+  it("estimates the potential step from the data, ignoring vertex jumps", () => {
+    const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, stepPotential: 5 });
+    expect(estimateCVStepMv(pts)).toBeCloseTo(5, 1);
+    expect(estimateCVStepMv([])).toBeNull();
+  });
+
+  it("green at the default 2 mV step, yellow at 10 mV, red at 20 mV (n=1)", () => {
+    expect(computeCVSignalQuality(metrics, { stepMv: 2, n: 1 }).resolutionLevel).toBe("green");
+    expect(computeCVSignalQuality(metrics, { stepMv: 10, n: 1 }).resolutionLevel).toBe("yellow");
+    expect(computeCVSignalQuality(metrics, { stepMv: 20, n: 1 }).resolutionLevel).toBe("red");
+  });
+
+  it("a coarse step drags the overall light down; a fine one leaves it green", () => {
+    expect(computeCVSignalQuality(metrics, { stepMv: 2, n: 1 }).level).toBe("green");
+    expect(computeCVSignalQuality(metrics, { stepMv: 20, n: 1 }).level).toBe("red");
+  });
+
+  it("features are narrower for n = 2, so the same step resolves them worse", () => {
+    expect(computeCVSignalQuality(metrics, { stepMv: 5, n: 1 }).resolutionLevel).toBe("green");
+    expect(computeCVSignalQuality(metrics, { stepMv: 5, n: 2 }).resolutionLevel).toBe("yellow");
+  });
+
+  it("is ignored when the step is unknown", () => {
+    const q = computeCVSignalQuality(metrics, { stepMv: null });
+    expect(q.resolutionLevel).toBe("idle");
+    expect(q.level).toBe("green");
   });
 });

@@ -46,7 +46,6 @@ import {
   CV_T_DEFAULT_K,
   CV_DEFAULT_D_CM2_S,
   CV_E0_PRIME_DEFAULT_V,
-  CV_SOLVER_DEFAULT_SPATIAL_NODES,
   CV_BV_K0,
   CV_BV_ALPHA,
   CV_BV_K_MAX,
@@ -54,6 +53,10 @@ import {
 import { solveTridiagonal } from "./cvDiffusionSolver";
 import { generateSWVProgram } from "./swvMetrics";
 import type { SWVDataPoint, SWVParameters } from "@/types/swv";
+
+// Fixed at the mesh size the SWV results were produced with; independent of
+// the CV mesh so tightening that one does not silently change SWV numbers.
+const SWV_SPATIAL_NODES = 180;
 
 const safeExp = (x: number) => Math.exp(Math.max(-60, Math.min(60, x)));
 const clamp = (x: number, lo: number, hi: number) =>
@@ -138,7 +141,7 @@ export function simulateReversibleDiffusionSWV(
     prog.length * 2 * dtHalf + (params.quietTime_s ?? 0),
     dtHalf,
   );
-  const N = Math.max(20, Math.floor(CV_SOLVER_DEFAULT_SPATIAL_NODES));
+  const N = Math.max(20, Math.floor(SWV_SPATIAL_NODES));
   const L = 6 * Math.sqrt(D * tMax);
   const dx = L / (N - 1);
   const lambda = (D * dtHalf) / (dx * dx);

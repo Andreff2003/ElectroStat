@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { EISDataPoint, FETTransferPoint } from "@/hooks/useSimulatedData";
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
-import { computeCVSignalQuality } from "@/utils/cvSignalQuality";
+import { computeCVSignalQuality, estimateCVStepMv } from "@/utils/cvSignalQuality";
 import type { SWVDataPoint, SWVMetrics } from "@/types/swv";
 import { InfoHint } from "@/components/InfoHint";
 
@@ -45,6 +45,7 @@ interface SignalQualityProps {
   fetVtBaseline?: number | null;
   fetVtAnalyte?: number | null;
   cvMetrics?: CVMetrics | null;
+  cvNElectrons?: number;
   /** Raw CV points — used only to check the outOfRange flag on live data. */
   cvData?: CVDataPoint[];
   /** SWV inputs — used when mode === "swv". */
@@ -475,7 +476,7 @@ const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: st
 );
 
 
-const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvData, swvData, swvMetrics }: SignalQualityProps) => {
+const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvNElectrons = 1, cvData, swvData, swvMetrics }: SignalQualityProps) => {
   const eisMetrics = useMemo(
     () => computeEISMetrics(eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed),
     [eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed],
@@ -502,7 +503,11 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
       ? "—"
       : `${deltaVtMv >= 0 ? "+" : ""}${deltaVtMv.toFixed(0)} mV`;
 
-  const cvLevels = useMemo(() => computeCVSignalQuality(cvMetrics ?? null), [cvMetrics]);
+  const cvStepMv = useMemo(() => estimateCVStepMv(cvData), [cvData]);
+  const cvLevels = useMemo(
+    () => computeCVSignalQuality(cvMetrics ?? null, { stepMv: cvStepMv, n: cvNElectrons }),
+    [cvMetrics, cvStepMv, cvNElectrons],
+  );
 
   const swvQuality = useMemo(
     () => computeSWVMetrics(swvData ?? [], swvMetrics ?? null),
@@ -561,7 +566,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
           </div>
           <div className="text-[10px] text-muted-foreground mt-1 leading-snug">
             {mode === "cv" && level === "yellow"
-              ? "Acceptable Signal — usable, but check peak detection and SNR."
+              ? "Acceptable Signal — usable, but check peak detection, SNR and scan resolution."
               : DIAGNOSTICS[level]}
           </div>
         </div>
@@ -619,6 +624,12 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
               title="min(SNR_anodic, SNR_cathodic) — corrected peak current ÷ noise estimate. ≥10 green, ≥3 yellow, below that red."
               value={cvMetrics ? `${Math.min(cvMetrics.SNR_anodic, cvMetrics.SNR_cathodic).toFixed(1)}` : pending}
               level={cvLevels.snrLevel}
+            />
+            <MetricRow
+              label="Scan Resolution"
+              title={`Potential step between points. A reversible peak pair is about 59/n mV wide (n=${cvNElectrons}), so the step sets how precisely Ep and ΔEp can be located. ≥10 points across that width green, ≥5 yellow, fewer red.`}
+              value={cvStepMv != null ? `${cvStepMv.toFixed(cvStepMv < 10 ? 1 : 0)} mV step` : "—"}
+              level={cvLevels.resolutionLevel}
             />
             {rangeInfo.anyFlagPresent && (
               <MetricRow
