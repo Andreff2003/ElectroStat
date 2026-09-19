@@ -3,6 +3,8 @@ import { render, screen } from "@testing-library/react";
 import SignalQuality, { worstOf } from "@/components/SignalQuality";
 import { fetDrainCurrent } from "@/utils/fetModel";
 import type { FETTransferPoint } from "@/hooks/useSimulatedData";
+import { simulateReversibleDiffusionSWV } from "@/utils/swvDiffusionSolver";
+import { analyzeSWV } from "@/utils/swvMetrics";
 
 describe("worstOf", () => {
   it("is green only when every level is green", () => {
@@ -77,5 +79,34 @@ describe("SignalQuality — BioFET overall vs ΔVt", () => {
 
     expect(screen.getByText("Poor Signal")).toBeInTheDocument();
     expect(screen.getByText("+60 mV")).toBeInTheDocument();
+  });
+});
+
+describe("SignalQuality — SWV lists only the criteria that drive the light", () => {
+  const params = {
+    startE: -0.2, endE: 0.6, step_mV: 4, amplitude_mV: 25, frequency_Hz: 25,
+    quietTime_s: 1, direction: "anodic" as const, baselineMethod: "auto" as const,
+    cMM: 5, nElectrons: 1, area_cm2: 0.0707,
+  };
+  const raw = simulateReversibleDiffusionSWV(params);
+  const { metrics } = analyzeSWV(raw, "auto");
+
+  it("shows peak, SNR and points, and not the system descriptors", () => {
+    render(
+      <SignalQuality
+        mode="swv"
+        eisData={[]}
+        fetBaseline={[]}
+        fetAnalyte={[]}
+        swvData={raw}
+        swvMetrics={metrics}
+      />,
+    );
+    expect(screen.getByText("Good Signal")).toBeInTheDocument();
+    expect(screen.getByText("Peak detected")).toBeInTheDocument();
+    expect(screen.getByText("SNR")).toBeInTheDocument();
+    expect(screen.getByText("Points")).toBeInTheDocument();
+    expect(screen.queryByText("Half-peak width")).toBeNull();
+    expect(screen.queryByText("Baseline stability")).toBeNull();
   });
 });

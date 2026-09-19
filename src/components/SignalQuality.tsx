@@ -369,25 +369,15 @@ function computeSWVMetrics(
       ready: false,
       peakDetected: false,
       snr: null as number | null,
-      halfPeakWidth: null as number | null,
       totalPoints: data?.length ?? 0,
-      relNoise: null as number | null,
       peakLevel: "idle" as Level,
       snrLevel: "idle" as Level,
-      widthLevel: "idle" as Level,
       pointsLevel: "idle" as Level,
-      baselineLevel: "idle" as Level,
     };
   }
   const peak = metrics.peakDetected;
   const snr = metrics.snr ?? null;
-  const hw = metrics.halfPeakWidth_mV ?? null;
   const n = data.length;
-  const noise = metrics.noiseRms_uA ?? null;
-  const relNoise =
-    noise != null && metrics.peakCurrentCorrected_uA
-      ? noise / Math.max(1e-9, Math.abs(metrics.peakCurrentCorrected_uA))
-      : null;
 
   const peakLevel: Level =
     peak && (snr ?? 0) >= 10
@@ -397,35 +387,20 @@ function computeSWVMetrics(
         : "red";
   const snrLevel: Level =
     snr == null ? (peak ? "yellow" : "red") : snr >= 10 ? "green" : snr >= 3 ? "yellow" : "red";
-  const widthLevel: Level =
-    hw == null
-      ? "red"
-      : // Nernstian half-peak width ≈ 90.6/n mV for surface-confined couples;
-        // diffusion-controlled peaks broaden with Esw. Green: realistic band;
-        // yellow: relaxed to cover sharp adsorbed and broader kinetic peaks.
-        hw >= 25 && hw <= 250
-        ? "green"
-        : hw >= 15 && hw <= 350
-          ? "yellow"
-          : "red";
   const pointsLevel: Level = n >= 50 ? "green" : n >= 20 ? "yellow" : "red";
-  const baselineLevel: Level =
-    relNoise == null ? "yellow" : relNoise < 0.1 ? "green" : relNoise < 0.3 ? "yellow" : "red";
 
-  const level = worstOf([peakLevel, snrLevel, widthLevel, pointsLevel, baselineLevel]);
+  // Half-peak width and noise-to-peak describe the redox system / repeat the SNR,
+  // so they are not part of the light (width stays in the SWV metrics grid).
+  const level = worstOf([peakLevel, snrLevel, pointsLevel]);
   return {
     level,
     ready: true,
     peakDetected: peak,
     snr,
-    halfPeakWidth: hw,
     totalPoints: n,
-    relNoise,
     peakLevel,
     snrLevel,
-    widthLevel,
     pointsLevel,
-    baselineLevel,
   };
 }
 
@@ -656,22 +631,10 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
               level={swvQuality.snrLevel}
             />
             <MetricRow
-              label="Half-peak width"
-              title="Expected SWV peak width depends on amplitude, electron number and kinetics. 25–250 mV green, 15–350 mV yellow, outside that red."
-              value={swvQuality.halfPeakWidth != null ? `${swvQuality.halfPeakWidth.toFixed(0)} mV` : ready ? "—" : pending}
-              level={swvQuality.widthLevel}
-            />
-            <MetricRow
               label="Points"
               title="Number of samples in this sweep — more points make peak/noise estimates more reliable. ≥50 green, 20–49 yellow, fewer than 20 red."
               value={`${swvQuality.totalPoints}`}
               level={swvQuality.pointsLevel}
-            />
-            <MetricRow
-              label="Baseline stability"
-              title="RMS noise as % of |peak corrected current|. <10% green, <30% yellow, above that red."
-              value={swvQuality.relNoise != null ? `${(swvQuality.relNoise * 100).toFixed(1)} % of peak` : ready ? "—" : pending}
-              level={swvQuality.baselineLevel}
             />
             {rangeInfo.anyFlagPresent && (
               <MetricRow
