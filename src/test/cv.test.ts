@@ -305,7 +305,7 @@ describe("computeCVMetrics — SNR fallback for clean curves", () => {
     expect(m).not.toBeNull();
     expect(m!.SNR_anodic).toBeGreaterThan(10);
     expect(m!.SNR_cathodic).toBeGreaterThan(10);
-    const q = computeCVSignalQuality(m!, 1, 20);
+    const q = computeCVSignalQuality(m!);
     expect(q.snrLevel).toBe("green");
     expect(q.level).not.toBe("red");
   });
@@ -454,50 +454,43 @@ describe("computeCVSignalQuality — pure helper", () => {
     hasAnodic: true, hasCathodic: true, warnings: [],
   };
 
-  it("green when peaks, ratio and SNR are in spec", () => {
-    expect(computeCVSignalQuality(baseMetrics, 1, 20).level).toBe("green");
+  it("green when both peaks are found and SNR is in spec", () => {
+    expect(computeCVSignalQuality(baseMetrics).level).toBe("green");
   });
-  it("low SNR → never green", () => {
-    const q = computeCVSignalQuality({ ...baseMetrics, SNR_anodic: 1, SNR_cathodic: 1 }, 1, 20);
+  it("low SNR → red", () => {
+    const q = computeCVSignalQuality({ ...baseMetrics, SNR_anodic: 1, SNR_cathodic: 1 });
     expect(q.snrLevel).toBe("red");
     expect(q.level).toBe("red");
   });
-  it("large ΔEp is red on its own row but informational: overall stays green", () => {
-    const q = computeCVSignalQuality({ ...baseMetrics, deltaEp: 300 }, 1, 20);
-    expect(q.deltaEpLevel).toBe("red");
-    expect(q.level).toBe("green");
-  });
-  it("ratio outside 0.9–1.1 (baseline problem) → not green overall", () => {
-    const q = computeCVSignalQuality({ ...baseMetrics, IpaIpcRatio: 0.75 }, 1, 20);
-    expect(q.ratioLevel).toBe("yellow");
+  it("moderate SNR → yellow", () => {
+    const q = computeCVSignalQuality({ ...baseMetrics, SNR_anodic: 5, SNR_cathodic: 5 });
     expect(q.level).toBe("yellow");
   });
-  it("a clean quasi-reversible simulated scan is green overall while reversibility stays yellow", () => {
+  it("one peak → yellow, no peaks → red", () => {
+    expect(computeCVSignalQuality({ ...baseMetrics, hasCathodic: false }).level).toBe("yellow");
+    expect(
+      computeCVSignalQuality({ ...baseMetrics, hasAnodic: false, hasCathodic: false }).level,
+    ).toBe("red");
+  });
+  it("system descriptors never change the light: ΔEp, ratio, reversibility, D", () => {
+    const q = computeCVSignalQuality({
+      ...baseMetrics,
+      deltaEp: 300,
+      IpaIpcRatio: 0.3,
+      reversibility: "irreversible" as const,
+      D_status: "invalid" as const,
+      D_valid: false,
+    });
+    expect(q.level).toBe("green");
+  });
+  it("a clean quasi-reversible simulated scan is green", () => {
     const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible" });
     const m = computeCVMetrics(pts, { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: 0.0707 })!;
-    const q = computeCVSignalQuality(m, 1, 20);
     expect(m.reversibility).toBe("quasi-reversible");
-    expect(q.reversibilityLevel).toBe("yellow");
-    expect(q.deltaEpLevel).toBe("yellow");
-    expect(q.level).toBe("green");
+    expect(computeCVSignalQuality(m).level).toBe("green");
   });
-  it("ratio outside 0.7–1.3 → red on ratio", () => {
-    const q = computeCVSignalQuality({ ...baseMetrics, IpaIpcRatio: 0.5 }, 1, 20);
-    expect(q.ratioLevel).toBe("red");
-  });
-  it("D_status='apparent' is informational — overall may still be green", () => {
-    const q = computeCVSignalQuality(
-      { ...baseMetrics, D_status: "apparent", D_valid: false },
-      1, 20,
-    );
-    expect(q.dLevel).toBe("yellow");
-    expect(q.level).toBe("green");
-  });
-  it("ΔEp tolerance is configurable", () => {
-    const tight = computeCVSignalQuality({ ...baseMetrics, deltaEp: 80 }, 1, 5);
-    const loose = computeCVSignalQuality({ ...baseMetrics, deltaEp: 80 }, 1, 30);
-    expect(tight.deltaEpLevel).toBe("red");
-    expect(loose.deltaEpLevel).toBe("green");
+  it("idle without metrics", () => {
+    expect(computeCVSignalQuality(null).level).toBe("idle");
   });
 });
 

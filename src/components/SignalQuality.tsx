@@ -45,8 +45,6 @@ interface SignalQualityProps {
   fetVtBaseline?: number | null;
   fetVtAnalyte?: number | null;
   cvMetrics?: CVMetrics | null;
-  cvNElectrons?: number;
-  cvDeltaEpToleranceMv?: number;
   /** Raw CV points — used only to check the outOfRange flag on live data. */
   cvData?: CVDataPoint[];
   /** SWV inputs — used when mode === "swv". */
@@ -477,7 +475,7 @@ const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: st
 );
 
 
-const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvNElectrons = 1, cvDeltaEpToleranceMv = 20, cvData, swvData, swvMetrics }: SignalQualityProps) => {
+const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvData, swvData, swvMetrics }: SignalQualityProps) => {
   const eisMetrics = useMemo(
     () => computeEISMetrics(eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed),
     [eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed],
@@ -504,14 +502,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
       ? "—"
       : `${deltaVtMv >= 0 ? "+" : ""}${deltaVtMv.toFixed(0)} mV`;
 
-  const cvLevels = useMemo(
-    () => computeCVSignalQuality(cvMetrics ?? null, cvNElectrons, cvDeltaEpToleranceMv) as {
-      level: Level; ready: boolean;
-      reversibilityLevel: Level; deltaEpLevel: Level; ratioLevel: Level;
-      peakLevel: Level; dLevel: Level; snrLevel: Level;
-    },
-    [cvMetrics, cvNElectrons, cvDeltaEpToleranceMv],
-  );
+  const cvLevels = useMemo(() => computeCVSignalQuality(cvMetrics ?? null), [cvMetrics]);
 
   const swvQuality = useMemo(
     () => computeSWVMetrics(swvData ?? [], swvMetrics ?? null),
@@ -570,7 +561,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
           </div>
           <div className="text-[10px] text-muted-foreground mt-1 leading-snug">
             {mode === "cv" && level === "yellow"
-              ? "Acceptable Signal — usable, but check the baseline, peak detection and SNR."
+              ? "Acceptable Signal — usable, but check peak detection and SNR."
               : DIAGNOSTICS[level]}
           </div>
         </div>
@@ -622,28 +613,12 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         )}
         {mode === "cv" && (
           <>
-            <MetricRow label="Reversibility" title="Classifies the redox couple by peak separation and current ratio. Reversible = green, quasi-reversible = yellow, irreversible = red. Informational: describes the system's kinetics, not the measurement quality, so it does not change the overall light." value={cvMetrics ? cvMetrics.reversibility : pending} level={cvLevels.reversibilityLevel} />
-            <MetricRow
-              label={`ΔEp (exp. ${(59.16 / Math.max(1, cvNElectrons)).toFixed(0)} mV)`}
-              title={`Expected ΔEp = 59.16 / n at 25 °C for n=${cvNElectrons} for a fully reversible couple. Green within the configured tolerance of that value (default ±20 mV), yellow within 3× the tolerance, red beyond that. Informational: a larger ΔEp reflects slower electron-transfer kinetics (quasi-reversible), not a bad measurement, so it does not change the overall light.`}
-              value={cvMetrics && Number.isFinite(cvMetrics.deltaEp) ? `${cvMetrics.deltaEp.toFixed(0)} mV` : "—"}
-              level={cvLevels.deltaEpLevel}
-            />
-            <MetricRow label="|Ipa/Ipc|" title="Anodic/cathodic peak current ratio. Near 1.0 = reversible couple. 0.9–1.1 green, 0.7–1.3 yellow, outside that red." value={cvMetrics && Number.isFinite(cvMetrics.IpaIpcRatio) ? cvMetrics.IpaIpcRatio.toFixed(2) : "—"} level={cvLevels.ratioLevel} />
             <MetricRow label="Peaks Detected" title="Oxidation/reduction peaks found, out of 2 expected. Both found = green, one = yellow, none = red." value={cvMetrics ? `${(cvMetrics.hasAnodic ? 1 : 0) + (cvMetrics.hasCathodic ? 1 : 0)} / 2` : pending} level={cvLevels.peakLevel} />
             <MetricRow
               label="SNR (min)"
               title="min(SNR_anodic, SNR_cathodic) — corrected peak current ÷ noise estimate. ≥10 green, ≥3 yellow, below that red."
               value={cvMetrics ? `${Math.min(cvMetrics.SNR_anodic, cvMetrics.SNR_cathodic).toFixed(1)}` : pending}
               level={cvLevels.snrLevel}
-            />
-            <MetricRow
-              label="D apparent"
-              title="Valid = reversible system. Apparent = quasi-reversible estimate. Invalid = not applicable here."
-              value={cvMetrics && Number.isFinite(cvMetrics.D_apparent)
-                ? `${cvMetrics.D_apparent.toExponential(2)} cm²/s (${cvMetrics.D_status})`
-                : cvMetrics ? `— (${cvMetrics.D_status})` : "—"}
-              level={cvLevels.dLevel}
             />
             {rangeInfo.anyFlagPresent && (
               <MetricRow
