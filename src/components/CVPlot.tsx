@@ -48,6 +48,8 @@ interface CVPlotProps {
   overlays?: { id: string; label: string; color: string; data: CVDataPoint[] }[];
   /** Overlay baseline trace (raw mode) or zero reference (corrected mode). */
   showBaseline?: boolean;
+  /** Appended to live-trace legend entries, e.g. the CV model, so they can't be confused with same-concentration overlays. */
+  liveLabelSuffix?: string;
   /** Compact read-only rendering for the dashboard grid. */
   compact?: boolean;
 }
@@ -67,6 +69,7 @@ const CVPlot = ({
   plotMode = "raw",
   overlays = [],
   showBaseline = false,
+  liveLabelSuffix,
   compact = false,
 }: CVPlotProps) => {
   // One series per (cycle, branch). Repeated E values across forward / reverse
@@ -345,7 +348,8 @@ const CVPlot = ({
                     const ov = overlays.find((o) => `ov_${o.id}` === k);
                     return ov?.label ?? k;
                   }
-                  return k.replace(/^c(\d+)_/, "Cycle $1 · ");
+                  const live = k.replace(/^c(\d+)_/, "Cycle $1 · ");
+                  return liveLabelSuffix ? `${live} · ${liveLabelSuffix}` : live;
                 })()}
                 connectNulls={false}
               />

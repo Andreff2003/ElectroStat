@@ -2792,7 +2792,8 @@ const Index = () => {
                     onClick={() => {
                       if (cvDataLive.length === 0) return;
                       const label =
-                        cvParams.cMM > 0 ? `${cvParams.cMM} mM` : `Blank ${cvOverlays.length + 1}`;
+                        (cvParams.cMM > 0 ? `${cvParams.cMM} mM` : `Blank ${cvOverlays.length + 1}`) +
+                        ` · ${cvParams.cvModel}`;
                       const color = OVERLAY_COLORS[cvOverlays.length % OVERLAY_COLORS.length];
                       setCvOverlays((prev) => {
                         const next = [...prev, { id: newId(), label, color, data: cvDataLive.slice() }];
@@ -2914,6 +2915,7 @@ const Index = () => {
                   plotMode={cvPlotMode}
                   overlays={cvOverlayMode ? cvOverlays : []}
                   showBaseline={cvShowBaseline}
+                  liveLabelSuffix={cvParams.cvModel}
                 />
               </div>
               {cvMetrics && (
