@@ -11,18 +11,18 @@ installation needed).
 
 The system is split into three layers:
 
-1. **Firmware** ([firmware/](firmware), ESP32-S3 + AD5941) — runs on the
+1. **Firmware** ([firmware/](firmware), ESP32-S3 + AD5941): runs on the
    HELPStat hardware, drives the AD5941 potentiostat IC and streams
    measurement data over WiFi or USB serial. Flash
    `firmware/ElectroStat_Firmware.ino` with the Arduino IDE ("ESP32S3 Dev
-   Module" board, ArduinoJson v7 library). UNTESTED against real hardware —
+   Module" board, ArduinoJson v7 library). UNTESTED against real hardware;
    see [firmware/README.md](firmware/README.md) for the current status per
    technique. See [NOTICE](NOTICE) for the different licenses the vendored
    driver files carry.
-2. **Bridge** ([bridge.py](bridge.py)) — a Python WebSocket server that
+2. **Bridge** ([bridge.py](bridge.py)): a Python WebSocket server that
    relays data between the firmware (or a built-in simulator) and the web
    app.
-3. **Web app** (this repository, [src/](src)) — a React 19 + TanStack Start
+3. **Web app** (this repository, [src/](src)): a React 19 + TanStack Start
    dashboard for running sweeps, fitting and analyzing the resulting data,
    and exporting results.
 
@@ -36,13 +36,13 @@ npm run dev
 ```
 
 Verified working with plain `npm` (Node 24) in a clean environment outside
-Lovable — 498 packages, no registry errors on the `@lovable.dev/*` packages
-this repo's dev tooling references. This repo is set up for
-[Bun](https://bun.sh) too (`bun.lock`); `bun install`/`bun run dev` work the
-same way, but `bun install` has been separately reported to fail outside an
-environment with access to Lovable's registry (403s on the
-`@lovable.dev/*` packages specifically) — that hasn't reproduced with npm,
-so if `bun install` fails for you, try npm instead.
+Lovable: 498 packages installed, with no registry errors on the
+`@lovable.dev/*` packages this repo's dev tooling references. The repo is set
+up for [Bun](https://bun.sh) too (`bun.lock`), and `bun install` /
+`bun run dev` work the same way. However, `bun install` has been reported to
+fail outside an environment with access to Lovable's registry (403s on the
+`@lovable.dev/*` packages specifically). That hasn't reproduced with npm, so
+if `bun install` fails for you, try npm instead.
 
 ### Bridge
 
@@ -64,7 +64,7 @@ python bridge.py --mode dados_reais --pasta "./dados_eis"  # replay EIS from Exc
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Firmware files derived from HELPStat keep
+MIT, see [LICENSE](LICENSE). Firmware files derived from HELPStat keep
 their original copyright headers; see [NOTICE](NOTICE) for details.
 
 ## Acknowledgments

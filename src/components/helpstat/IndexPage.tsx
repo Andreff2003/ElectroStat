@@ -112,6 +112,7 @@ import { logActivity, clearActivityLog } from "@/utils/activityLog";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
 import { type DemoPhase, PHASE_ORDER, PHASE_LABEL } from "@/components/helpstat/demoPhases";
 import DashboardHeader from "@/components/helpstat/DashboardHeader";
+import HomeView from "@/components/helpstat/HomeView";
 import {
   OVERLAY_COLORS,
   importOverlayCsv,
@@ -125,6 +126,7 @@ import {
 
 const Index = () => {
   const [mode, setMode] = useState<"eis" | "fet" | "cv" | "swv" | "dashboard">("eis");
+  const [showHome, setShowHome] = useState(true);
   const [dataSource, setDataSource] = useState<"simulated" | "live" | "multichannel">("simulated");
   const [multiChannelLayout, setMultiChannelLayout] = useState<"combined" | "separate">("combined");
   const [channels, setChannels] = useState<Channel[]>([
@@ -1909,6 +1911,23 @@ const Index = () => {
   const liveDropped =
     dataSource === "live" && isAnyTechniqueRunning && ws.status !== "connected";
 
+  if (showHome) {
+    return (
+      <HomeView
+        dataSource={dataSource}
+        onChangeSource={handleChangeSource}
+        onSelectMode={(m) => {
+          setMode(m);
+          setShowHome(false);
+        }}
+        onTryDemo={() => {
+          setShowHome(false);
+          runDemoPhase("eis");
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
       {liveDropped && (
@@ -1959,6 +1978,7 @@ const Index = () => {
         }}
         onCancelDemo={cancelDemo}
         onResetDemo={() => setDemoPhase("idle")}
+        onHome={() => setShowHome(true)}
       />
 
       {/* Connection Panel */}

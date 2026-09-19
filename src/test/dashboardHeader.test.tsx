@@ -21,6 +21,7 @@ function baseProps() {
     onContinueDemo: noop,
     onCancelDemo: noop,
     onResetDemo: noop,
+    onHome: noop,
   };
 }
 

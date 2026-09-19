@@ -30,6 +30,7 @@ interface DashboardHeaderProps {
   onContinueDemo: () => void;
   onCancelDemo: () => void;
   onResetDemo: () => void;
+  onHome: () => void;
 }
 
 /**
@@ -52,13 +53,21 @@ export default function DashboardHeader({
   onContinueDemo,
   onCancelDemo,
   onResetDemo,
+  onHome,
 }: DashboardHeaderProps) {
   return (
     <header className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <h1 className="text-xl font-semibold text-foreground tracking-tight font-mono">
-          ElectroStat
-          <span className="text-primary ml-2 text-sm font-normal">Biosensor Dashboard</span>
+          <button
+            type="button"
+            onClick={onHome}
+            title="Back to home"
+            className="text-left hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
+          >
+            ElectroStat
+            <span className="text-primary ml-2 text-sm font-normal">Biosensor Dashboard</span>
+          </button>
         </h1>
         <p className="text-xs text-muted-foreground mt-1">
           ESP32-S3 / AD5941 — {sourceLabel}
