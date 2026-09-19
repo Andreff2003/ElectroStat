@@ -569,7 +569,9 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             {HEADLINES[level]}
           </div>
           <div className="text-[10px] text-muted-foreground mt-1 leading-snug">
-            {DIAGNOSTICS[level]}
+            {mode === "cv" && level === "yellow"
+              ? "Acceptable Signal — usable, but check the baseline, peak detection and SNR."
+              : DIAGNOSTICS[level]}
           </div>
         </div>
       </div>
@@ -620,10 +622,10 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         )}
         {mode === "cv" && (
           <>
-            <MetricRow label="Reversibility" title="Classifies the redox couple by peak separation and current ratio. Reversible = green, quasi-reversible = yellow, irreversible = red." value={cvMetrics ? cvMetrics.reversibility : pending} level={cvLevels.reversibilityLevel} />
+            <MetricRow label="Reversibility" title="Classifies the redox couple by peak separation and current ratio. Reversible = green, quasi-reversible = yellow, irreversible = red. Informational: describes the system's kinetics, not the measurement quality, so it does not change the overall light." value={cvMetrics ? cvMetrics.reversibility : pending} level={cvLevels.reversibilityLevel} />
             <MetricRow
               label={`ΔEp (exp. ${(59.16 / Math.max(1, cvNElectrons)).toFixed(0)} mV)`}
-              title={`Expected ΔEp = 59.16 / n at 25 °C for n=${cvNElectrons}. Green within the configured tolerance of that value (default ±20 mV), yellow within 3× the tolerance, red beyond that.`}
+              title={`Expected ΔEp = 59.16 / n at 25 °C for n=${cvNElectrons} for a fully reversible couple. Green within the configured tolerance of that value (default ±20 mV), yellow within 3× the tolerance, red beyond that. Informational: a larger ΔEp reflects slower electron-transfer kinetics (quasi-reversible), not a bad measurement, so it does not change the overall light.`}
               value={cvMetrics && Number.isFinite(cvMetrics.deltaEp) ? `${cvMetrics.deltaEp.toFixed(0)} mV` : "—"}
               level={cvLevels.deltaEpLevel}
             />

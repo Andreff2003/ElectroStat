@@ -16,7 +16,16 @@ export interface CVQualityLevels {
 /**
  * Pure derivation of the CV signal-quality traffic-light levels.
  * Extracted from SignalQuality.tsx so the rules are unit-testable.
- * D apparent is informational only and never sets the overall light.
+ *
+ * The overall light answers "is this a trustworthy measurement?", so it is
+ * driven only by data-quality criteria: both peaks found, SNR, and the
+ * baseline-corrected |Ipa/Ipc| (a chemical-stability / baseline check that
+ * stays near 1 for a stable couple at any kinetics).
+ * ΔEp, the reversibility class and D apparent are properties of the redox
+ * system (rate constant k0), not of the measurement: a perfectly clean
+ * quasi-reversible scan has ΔEp > 59/n mV by physics and re-measuring cannot
+ * change that. They keep their own per-row colours but never set the overall
+ * light, otherwise a good quasi-reversible measurement could never be green.
  */
 export function computeCVSignalQuality(
   metrics: CVMetrics | null | undefined,
@@ -84,7 +93,6 @@ export function computeCVSignalQuality(
   let overall: CVQualityLevel = "red";
   if (
     peakLevel === "green" &&
-    deltaEpLevel === "green" &&
     ratioLevel === "green" &&
     snrLevel === "green"
   ) {

@@ -454,7 +454,7 @@ describe("computeCVSignalQuality — pure helper", () => {
     hasAnodic: true, hasCathodic: true, warnings: [],
   };
 
-  it("green when peaks, ΔEp, ratio and SNR all in spec", () => {
+  it("green when peaks, ratio and SNR are in spec", () => {
     expect(computeCVSignalQuality(baseMetrics, 1, 20).level).toBe("green");
   });
   it("low SNR → never green", () => {
@@ -462,10 +462,24 @@ describe("computeCVSignalQuality — pure helper", () => {
     expect(q.snrLevel).toBe("red");
     expect(q.level).toBe("red");
   });
-  it("very large ΔEp → red on ΔEp, not green overall", () => {
+  it("large ΔEp is red on its own row but informational: overall stays green", () => {
     const q = computeCVSignalQuality({ ...baseMetrics, deltaEp: 300 }, 1, 20);
     expect(q.deltaEpLevel).toBe("red");
-    expect(q.level).not.toBe("green");
+    expect(q.level).toBe("green");
+  });
+  it("ratio outside 0.9–1.1 (baseline problem) → not green overall", () => {
+    const q = computeCVSignalQuality({ ...baseMetrics, IpaIpcRatio: 0.75 }, 1, 20);
+    expect(q.ratioLevel).toBe("yellow");
+    expect(q.level).toBe("yellow");
+  });
+  it("a clean quasi-reversible simulated scan is green overall while reversibility stays yellow", () => {
+    const pts = buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "quasi-reversible" });
+    const m = computeCVMetrics(pts, { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: 0.0707 })!;
+    const q = computeCVSignalQuality(m, 1, 20);
+    expect(m.reversibility).toBe("quasi-reversible");
+    expect(q.reversibilityLevel).toBe("yellow");
+    expect(q.deltaEpLevel).toBe("yellow");
+    expect(q.level).toBe("green");
   });
   it("ratio outside 0.7–1.3 → red on ratio", () => {
     const q = computeCVSignalQuality({ ...baseMetrics, IpaIpcRatio: 0.5 }, 1, 20);
