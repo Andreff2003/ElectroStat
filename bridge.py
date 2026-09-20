@@ -170,11 +170,17 @@ CV_T_DEFAULT_K = 298.15
 CV_DEFAULT_D_CM2_S = 7.26e-6
 CV_E0_PRIME_DEFAULT_V = 0.22
 CV_DEFAULT_CDL_UF = 2.0
-CV_DEFAULT_SOLVER_NODES = 140
-CV_BV_K_MAX = 10.0  # cm/s — numerical safety ceiling on the BV rate constants
+# Same numbers as src/utils/cvConstants.ts: 2500 nodes put the reversible peak
+# within 0.4 % of Randles-Sevcik (180 nodes under-resolve the diffusion layer).
+CV_DEFAULT_SOLVER_NODES = 2500
+# The semi-implicit BV update stays finite for any k, so this only guards
+# overflow. A low ceiling (it was 10 cm/s) breaks Nernst equilibrium away from E0'.
+CV_BV_K_MAX = 1e6  # cm/s
 
-# SWV simulation — same empirical Langmuir-Gaussian model as the frontend,
-# so live simulated mode matches the standalone frontend simulator 1:1.
+# SWV simulation — the default models are the same physical solvers as the
+# frontend (src/utils/swvDiffusionSolver.ts): exact reversible and graded
+# sub-step quasi-reversible. The empirical Langmuir-Gaussian model below is only
+# the legacy fallback ("empirical" in swvModel), as in the frontend.
 SWV_IMAX_UA = 1.6
 SWV_KD_NM = 30.0
 SWV_EPEAK_V = 0.22
@@ -843,7 +849,7 @@ def parse_cv_params(data: Dict[str, Any]) -> Dict[str, Any]:
         "stepMv": max(0.1, as_float(data, ["stepPotential", "stepMv", "step_mV", "step"], 1.0)),
         "cvModel": str(data.get("cvModel", data.get("model", "reversible"))).lower(),
         "noiseEnabled": bool(data.get("noiseEnabled", True)),
-        "spatialNodes": max(40, min(400, as_int(data, ["spatialNodes"], CV_DEFAULT_SOLVER_NODES))),
+        "spatialNodes": max(40, min(5000, as_int(data, ["spatialNodes"], CV_DEFAULT_SOLVER_NODES))),
         # Equilibration delay at E_start before the ramp begins. Frontend's
         # field is "quietTime" (seconds); accepted here so it round-trips to
         # real hardware (send_to_hardware) and is honoured by the simulator.
@@ -867,42 +873,41 @@ def parse_cv_params(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def generate_cv_program(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Potential program, same construction as buildPotentialProgram in
+    src/hooks/useSimulatedCVData.ts: each ramp has round(|dE|/step) equal steps
+    and the time axis is uniform, t = index * step / scan_rate."""
     e_start = params["eStart"]
     e_v1 = params["eVertex1"]
     e_v2 = params["eVertex2"]
     n_cycles = params["nCycles"]
-    step_v = params["stepMv"] / 1000.0
+    step_v = max(1e-4, params["stepMv"] / 1000.0)
     scan_rate_v_s = params["scanRate"] / 1000.0
-    segs: List[Dict[str, Any]] = []
+    dt = step_v / max(scan_rate_v_s, 1e-12)
+    segs: List[Dict[str, Any]] = [{"E": e_start, "cycle": 1, "t": 0.0, "branch": "forward", "direction": 0}]
+
+    def add_ramp(start: float, end: float, branch: str, cycle: int):
+        n_steps = max(1, int(math.floor(abs(end - start) / step_v + 0.5)))
+        direction = 1 if end >= start else -1
+        for k in range(1, n_steps + 1):
+            segs.append({
+                "E": start + (end - start) * (k / n_steps),
+                "cycle": cycle,
+                "t": len(segs) * dt,
+                "branch": branch,
+                "direction": direction,
+            })
+
     cur = e_start
-    t = 0.0
-
-    def add_ramp(start: float, end: float, branch: str, cycle: int, include_start: bool = False):
-        nonlocal t
-        delta = end - start
-        if abs(delta) < 1e-12:
-            if include_start:
-                segs.append({"E": start, "cycle": cycle, "t": t, "branch": branch, "direction": 0})
-            return
-        direction = 1 if delta > 0 else -1
-        n_steps = max(1, int(math.ceil(abs(delta) / step_v)))
-        for k in range(0 if include_start else 1, n_steps + 1):
-            frac = k / n_steps
-            E = start + delta * frac
-            if segs:
-                dE = abs(E - segs[-1]["E"])
-                t += dE / max(scan_rate_v_s, 1e-12)
-            segs.append({"E": E, "cycle": cycle, "t": t, "branch": branch, "direction": direction})
-
-    segs.append({"E": cur, "cycle": 1, "t": 0.0, "branch": "forward", "direction": 0})
     for c in range(1, n_cycles + 1):
         add_ramp(cur, e_v1, "forward", c)
         cur = e_v1
         add_ramp(cur, e_v2, "reverse", c)
         cur = e_v2
-        if c < n_cycles and abs(cur - e_start) > 1e-12:
+        if c < n_cycles and abs(cur - e_start) > 1e-9:
             add_ramp(cur, e_start, "return", c)
             cur = e_start
+    if len(segs) >= 2:
+        segs[0]["direction"] = segs[1]["direction"]
     return segs
 
 
@@ -954,6 +959,8 @@ def simulate_bv_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, An
     simulated "quasi-reversible" CV matches the browser simulator's physics.
     Equal D for O and R; first-order mass balance CO_surf + CR_surf ~= cBulk.
     Educational approximation only — not a full finite-difference BV solver.
+    Kept in step with the frontend: lag-corrected Cottrell weights and
+    CV_BV_K_MAX = 1e6 (validated against Randles-Sevcik and Nicholson there).
     """
     n = params["n"]
     cMM = params["cMM"]
@@ -981,8 +988,8 @@ def simulate_bv_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, An
     # on the lag k, so precompute them once. The convolution is still O(n^2)
     # since the 1/sqrt(k) kernel can't be truncated without distorting the
     # physics — fine for typical CV sweep sizes, same tradeoff as the frontend.
-    cottrell_w = [0.0] * (n_pts + 1)
-    for k in range(1, n_pts + 1):
+    cottrell_w = [0.0] * (n_pts + 2)
+    for k in range(1, n_pts + 2):
         cottrell_w[k] = 2.0 * (math.sqrt(k) - math.sqrt(k - 1))
 
     i_amps: List[float] = [0.0] * n_pts
@@ -994,7 +1001,9 @@ def simulate_bv_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, An
 
         sum_hist = 0.0
         for j in range(i):
-            sum_hist += i_amps[j] * cottrell_w[i - j]
+            # The current step already carries lag 1 (inside beta), so step j
+            # sits at lag i - j + 1.
+            sum_hist += i_amps[j] * cottrell_w[i - j + 1]
         conv_known = (sum_hist * sqrt_dt) / (a_fac * sqrt_pi_d)
 
         i_amp = 0.0
@@ -1019,57 +1028,106 @@ def simulate_bv_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, An
     return out
 
 
-def simulate_reversible_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, Any]) -> List[float]:
-    """Lightweight reversible diffusion/Nernst CV solver for bridge simulated live mode."""
+def reversible_cv_faradaic_ua(program: List[Dict[str, Any]], params: Dict[str, Any]) -> List[float]:
+    """Faradaic current (uA) of the reversible CV: a port of
+    simulateReversibleDiffusionCV (src/utils/cvDiffusionSolver.ts).
+
+    1-D semi-infinite diffusion, L = 6*sqrt(D*tMax), Nernst surface with local
+    mass conservation, backward Euler. The tridiagonal matrix is constant, so
+    its Thomas factors are computed once and each step only does the two
+    substitution sweeps (O and R together).
+    """
     c_bulk = max(0.0, params["cMM"]) * 1e-6
+    if c_bulk <= 0 or not program:
+        return [0.0] * len(program)
     D = params.get("diffusionCoeff", CV_DEFAULT_D_CM2_S)
     n_e = params["n"]
     area = params["areaCm2"]
-    scan_v_s = params["scanRate"] / 1000.0
-    nodes = params.get("spatialNodes", CV_DEFAULT_SOLVER_NODES)
-    t_max = max((p["t"] for p in program), default=1.0)
-    if c_bulk <= 0 or t_max <= 0:
-        # Capacitive blank only.
-        out: List[float] = []
-        for p in program:
-            cap = CV_DEFAULT_CDL_UF * scan_v_s * (1 if p["direction"] > 0 else -1 if p["direction"] < 0 else 0)
-            out.append(cap + (random.gauss(0, 0.002) if params.get("noiseEnabled", True) else 0.0))
-        return out
+    e0 = params.get("formalPotential", CV_E0_PRIME_DEFAULT_V)
+    T = CV_T_DEFAULT_K
+    dt = max(1e-4, params["stepMv"] / 1000.0) / (params["scanRate"] / 1000.0)
+    t_max = max((len(program) - 1) * dt, dt)
 
-    L = max(6.0 * math.sqrt(D * t_max), 1e-6)
-    dx = L / max(nodes - 1, 1)
-    CO = [c_bulk] * nodes
-    CR = [0.0] * nodes
+    N = max(20, int(params.get("spatialNodes", CV_DEFAULT_SOLVER_NODES)))
+    dx = 6.0 * math.sqrt(D * t_max) / (N - 1)
+    lam = D * dt / (dx * dx)
+    M = N - 2
+
+    # Thomas factors for a = c = -lam, b = 1 + 2 lam (a[0] and c[M-1] unused).
+    b = 1.0 + 2.0 * lam
+    inv_m = [0.0] * M
+    cp = [0.0] * M
+    inv_m[0] = 1.0 / b
+    cp[0] = -lam * inv_m[0]
+    for i in range(1, M):
+        inv_m[i] = 1.0 / (b + lam * cp[i - 1])
+        cp[i] = (-lam * inv_m[i]) if i < M - 1 else 0.0
+
+    CO = [c_bulk] * N
+    CR = [0.0] * N
+    nf = n_e * CV_F / (CV_R * T)
     out: List[float] = []
-    prev_t = program[0]["t"] if program else 0.0
 
-    e0_formal = params.get("formalPotential", CV_E0_PRIME_DEFAULT_V)
+    for k, p in enumerate(program):
+        theta = safe_exp(nf * (p["E"] - e0))
+        surf = c_bulk if k == 0 else clamp(CO[1] + CR[1], 0.0, c_bulk)
+        CO[0] = surf * theta / (1.0 + theta)
+        CR[0] = surf / (1.0 + theta)
 
-    def apply_nernst(E: float):
-        theta = safe_exp(n_e * CV_F * (E - e0_formal) / (CV_R * CV_T_DEFAULT_K))
-        # Approximate local surface conservation from first interior node.
-        surf_total = clamp(CO[1] + CR[1], 0.0, c_bulk)
-        CO[0] = surf_total * theta / (1.0 + theta)
-        CR[0] = surf_total / (1.0 + theta)
-        CO[-1] = c_bulk
-        CR[-1] = 0.0
+        if M >= 1:
+            dpO = [0.0] * M
+            dpR = [0.0] * M
+            prevO = prevR = 0.0
+            for i in range(M):
+                dO = CO[i + 1]
+                dR = CR[i + 1]
+                if i == 0:
+                    dO += lam * CO[0]
+                    dR += lam * CR[0]
+                if i == M - 1:
+                    dO += lam * c_bulk
+                # sub-diagonal a is -lam for i >= 1 and unused for i = 0
+                if i > 0:
+                    dO += lam * prevO
+                    dR += lam * prevR
+                prevO = dO * inv_m[i]
+                prevR = dR * inv_m[i]
+                dpO[i] = prevO
+                dpR[i] = prevR
+            xO = dpO[M - 1]
+            xR = dpR[M - 1]
+            CO[M] = xO if xO > 0.0 else 0.0
+            CR[M] = xR if xR > 0.0 else 0.0
+            for i in range(M - 2, -1, -1):
+                xO = dpO[i] - cp[i] * xO
+                xR = dpR[i] - cp[i] * xR
+                CO[i + 1] = xO if xO > 0.0 else 0.0
+                CR[i + 1] = xR if xR > 0.0 else 0.0
+        CO[N - 1] = c_bulk
+        CR[N - 1] = 0.0
 
-    for p in program:
-        E = p["E"]
-        t = p["t"]
-        dt = max(0.0, t - prev_t)
-        apply_nernst(E)
-        if dt > 0:
-            lam = D * dt / max(dx * dx, 1e-30)
-            CO = implicit_diffusion_step(CO, CO[0], c_bulk, lam)
-            CR = implicit_diffusion_step(CR, CR[0], 0.0, lam)
-            apply_nernst(E)
-        J_O = -D * (CO[1] - CO[0]) / dx
-        I_A = n_e * CV_F * area * J_O
+        surf = clamp(CO[1] + CR[1], 0.0, c_bulk)
+        CO[0] = surf * theta / (1.0 + theta)
+        CR[0] = surf / (1.0 + theta)
+
+        j_o = -D * (CO[1] - CO[0]) / dx
+        out.append(n_e * CV_F * area * j_o * 1e6)
+    return out
+
+
+def simulate_reversible_diffusion_cv(program: List[Dict[str, Any]], params: Dict[str, Any]) -> List[float]:
+    """Reversible CV for the bridge simulated mode: the physical solver above
+    plus the bridge's small capacitive step and optional noise."""
+    scan_v_s = params["scanRate"] / 1000.0
+    faradaic = reversible_cv_faradaic_ua(program, params)
+    out: List[float] = []
+    for p, i_ua in zip(program, faradaic):
         cap = CV_DEFAULT_CDL_UF * scan_v_s * (1 if p["direction"] > 0 else -1 if p["direction"] < 0 else 0)
-        noise = random.gauss(0.0, 0.015 + 0.0005 * abs(I_A * 1e6)) if params.get("noiseEnabled", True) else 0.0
-        out.append(I_A * 1e6 + cap + noise)
-        prev_t = t
+        if params.get("noiseEnabled", True):
+            noise = random.gauss(0.0, 0.015 + 0.0005 * abs(i_ua)) if params["cMM"] > 0 else random.gauss(0, 0.002)
+        else:
+            noise = 0.0
+        out.append(i_ua + cap + noise)
     return out
 
 
@@ -1087,11 +1145,13 @@ async def loop_cv_simulado(params: Dict[str, Any]):
         program = generate_cv_program(params)
         model = params["cvModel"]
         print(f"[SIM-CV] model={model} C={params['cMM']} mM v={params['scanRate']} mV/s cycles={params['nCycles']} points={len(program)}")
+        # Solvers are CPU-bound; run them off the event loop so WebSocket
+        # traffic (ping, stop) stays responsive while they compute.
         if model == "reversible":
-            currents = simulate_reversible_diffusion_cv(program, params)
-            simulation_model = "reversible-diffusion-nernst-lightweight"
+            currents = await asyncio.to_thread(simulate_reversible_diffusion_cv, program, params)
+            simulation_model = "reversible-diffusion-nernst"
         else:
-            currents = simulate_bv_diffusion_cv(program, params)
+            currents = await asyncio.to_thread(simulate_bv_diffusion_cv, program, params)
             simulation_model = "quasi-reversible-butler-volmer-cottrell"
 
         for p, I in zip(program, currents):
@@ -1134,7 +1194,10 @@ def validate_swv_params(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     freq_hz = as_float(data, ["frequency_Hz", "frequencyHz", "freq"], 25.0)
     quiet_s = as_float(data, ["quietTime_s", "quietTimeS", "quiet"], 2.0)
     direction = str(data.get("direction", "") or "anodic").lower()
-    concentration = as_float(data, ["concentration", "c", "cMM"], 0.0)
+    # concentration is in nM (concentration_nM in the frontend); cMM (mM), when
+    # sent, takes precedence for the physical solvers exactly as in resolveParams
+    # of src/utils/swvDiffusionSolver.ts.
+    concentration = as_float(data, ["concentration", "c"], 0.0)
 
     if not (step_mv > 0):
         return None, "step_mV must be > 0."
@@ -1149,7 +1212,19 @@ def validate_swv_params(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     if direction not in {"anodic", "cathodic"}:
         direction = "anodic"
 
+    swv_model = str(data.get("swvModel", "reversible")).lower()
+    if swv_model not in {"reversible", "quasi-reversible", "empirical"}:
+        swv_model = "reversible"
+    extra: Dict[str, Any] = {"swvModel": swv_model}
+    c_mm = finite_float(data.get("cMM"))
+    if c_mm is not None:
+        extra["cMM"] = max(0.0, c_mm)
+    area = finite_float(data.get("area_cm2", data.get("areaCm2")))
+    if area is not None and area > 0:
+        extra["area_cm2"] = area
+
     return {
+        **extra,
         "startE": start_e,
         "endE": end_e,
         "step_mV": step_mv,
@@ -1158,11 +1233,9 @@ def validate_swv_params(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
         "quietTime_s": quiet_s,
         "direction": direction,
         "concentration": concentration,
-        # Analyte / redox-probe parameters. formalPotential is wired into the
-        # peak-center of this bridge's simplified empirical Gaussian SWV model.
-        # nElectrons/diffusionCoeff/k0/alpha are accepted and echoed for
-        # traceability, but (like CV) this bridge does not run a full
-        # diffusion+Butler-Volmer solver, so they don't reshape the waveform.
+        # Analyte / redox-probe parameters: they drive the physical solvers
+        # (formalPotential = E0', nElectrons, diffusionCoeff; k0/alpha for the
+        # quasi-reversible model), as in the frontend simulator.
         "nElectrons": max(1, as_int(data, ["nElectrons"], 1)),
         "diffusionCoeff": max(1e-9, as_float(data, ["diffusionCoeff"], CV_DEFAULT_D_CM2_S)),
         "formalPotential": as_float(data, ["formalPotential"], SWV_EPEAK_V),
@@ -1177,6 +1250,200 @@ def validate_swv_params(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
 
 def swv_peak_current_ua(concentration_nm: float) -> float:
     return langmuir(concentration_nm, SWV_IMAX_UA, SWV_KD_NM)
+
+
+def generate_swv_program(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Staircase program, same as generateSWVProgram in src/utils/swvMetrics.ts."""
+    step_v = params["step_mV"] / 1000.0
+    n = int(math.floor(abs(params["endE"] - params["startE"]) / step_v + 1e-9)) + 1
+    ramp = 1 if params["endE"] >= params["startE"] else -1
+    period = 1.0 / params["frequency_Hz"]
+    return [
+        {
+            "index": i,
+            "E": params["startE"] + ramp * i * step_v,
+            "time": params["quietTime_s"] + i * period,
+            "direction": params["direction"],
+        }
+        for i in range(n)
+    ]
+
+
+def _swv_resolve(params: Dict[str, Any]) -> Dict[str, Any]:
+    c_mm = params.get("cMM")
+    if c_mm is None:
+        c_mm = params["concentration"] * 1e-6  # nM -> mM
+    f = params["frequency_Hz"]
+    return {
+        "D": params.get("diffusionCoeff", CV_DEFAULT_D_CM2_S),
+        "E0": params.get("formalPotential", CV_E0_PRIME_DEFAULT_V),
+        "T": CV_T_DEFAULT_K,
+        "n": params.get("nElectrons", 1),
+        "A": params.get("area_cm2", 0.0707),
+        "c_bulk": max(0.0, c_mm) * 1e-6,  # mol/cm^3
+        "esw": max(0.0, params["amplitude_mV"]) / 1000.0,
+        "dt_half": 1.0 / (2.0 * f),
+        "pulse_sign": 1 if params["endE"] >= params["startE"] else -1,
+        "k0": params.get("k0", 0.01),
+        "alpha": params.get("alpha", 0.5),
+    }
+
+
+def swv_reversible_exact(params: Dict[str, Any], prog: List[Dict[str, Any]]) -> List[Tuple[float, float]]:
+    """Exact reversible SWV (port of simulateReversibleDiffusionSWV).
+
+    With a Nernstian surface, the surface fraction of R is piecewise constant in
+    time, so every potential jump da_k at t_k adds a Cottrell response:
+        I(t) = -nFA C* sqrt(D/pi) * sum_k da_k / sqrt(t - t_k)
+    No mesh and no time stepping. Returns (IForward, IReverse) in uA per step."""
+    r = _swv_resolve(params)
+    if r["c_bulk"] <= 0:
+        return [(0.0, 0.0)] * len(prog)
+    nf = r["n"] * CV_F / (CV_R * r["T"])
+    surface_r = lambda E: 1.0 / (1.0 + safe_exp(nf * (E - r["E0"])))
+    jump_t: List[float] = []
+    jump_da: List[float] = []
+    state = {"a": 0.0}
+
+    def jump(t: float, a: float):
+        jump_t.append(t)
+        jump_da.append(a - state["a"])
+        state["a"] = a
+
+    if params["quietTime_s"] > 0:
+        jump(0.0, surface_r(prog[0]["E"]))
+    prefactor = -r["n"] * CV_F * r["A"] * r["c_bulk"] * math.sqrt(r["D"] / math.pi) * 1e6
+
+    def current_at(t: float) -> float:
+        return prefactor * sum(da / math.sqrt(t - tk) for tk, da in zip(jump_t, jump_da))
+
+    out: List[Tuple[float, float]] = []
+    for s in prog:
+        t_fwd = s["time"]
+        jump(t_fwd, surface_r(s["E"] + r["pulse_sign"] * r["esw"]))
+        i_fwd = current_at(t_fwd + r["dt_half"])
+        jump(t_fwd + r["dt_half"], surface_r(s["E"] - r["pulse_sign"] * r["esw"]))
+        i_rev = current_at(t_fwd + 2 * r["dt_half"])
+        out.append((i_fwd, i_rev))
+    return out
+
+
+# Same sub-step budget as the frontend, so both give identical currents (checked
+# to ~1e-13). The history convolution is O(n^2) in the sub-steps: ~5 s in pure
+# Python for the default 2 mV / 0.8 V program, which is why the solve runs in a
+# worker thread before the points are streamed.
+SWV_QUASI_SUBSTEP_BUDGET = 10000
+SWV_QUASI_MAX_SUBSTEPS = 24
+SWV_QUASI_MIN_SUBSTEPS = 4
+
+
+def swv_quasi_reversible(params: Dict[str, Any], prog: List[Dict[str, Any]]) -> List[Tuple[float, float]]:
+    """Quasi-reversible SWV (port of simulateQuasiReversibleSWV): Butler-Volmer
+    kinetics + Cottrell-kernel convolution with each half-pulse split into K
+    Chebyshev-graded sub-steps (dense right after the jump and at the sampling
+    instant, where the 1/sqrt(t) transient is steep)."""
+    r = _swv_resolve(params)
+    if r["c_bulk"] <= 0:
+        return [(0.0, 0.0)] * len(prog)
+    D, T, n, A = r["D"], r["T"], r["n"], r["A"]
+    c_bulk, dt_half, esw, sign = r["c_bulk"], r["dt_half"], r["esw"], r["pulse_sign"]
+    k0, alpha, e0 = r["k0"], r["alpha"], r["E0"]
+
+    quiet = params["quietTime_s"]
+    half_pulses = 2 * len(prog) + (1 if quiet > 0 else 0)
+    K = int(clamp(SWV_QUASI_SUBSTEP_BUDGET // half_pulses, SWV_QUASI_MIN_SUBSTEPS, SWV_QUASI_MAX_SUBSTEPS))
+    grid = [0.5 * (1 - math.cos(math.pi * j / K)) for j in range(K + 1)]
+
+    tb: List[float] = [0.0]
+    epot: List[float] = []
+
+    def add_half_pulse(t0: float, duration: float, E: float) -> int:
+        for j in range(1, K + 1):
+            tb.append(t0 + duration * grid[j])
+            epot.append(E)
+        return len(epot) - 1
+
+    if quiet > 0:
+        add_half_pulse(0.0, quiet, prog[0]["E"])
+    fwd_end: List[int] = []
+    rev_end: List[int] = []
+    for s in prog:
+        fwd_end.append(add_half_pulse(s["time"], dt_half, s["E"] + sign * esw))
+        rev_end.append(add_half_pulse(s["time"] + dt_half, dt_half, s["E"] - sign * esw))
+
+    afac = n * CV_F * A
+    pref = 1.0 / (afac * math.sqrt(math.pi * D))
+    f_rt = n * CV_F / (CV_R * T)
+    sqrt = math.sqrt
+
+    n_sub = len(epot)
+    cur = [0.0] * n_sub
+    for i in range(n_sub):
+        t_end = tb[i + 1]
+        S = [sqrt(t_end - t) for t in tb[: i + 1]]
+        # hist = 2*pref * sum_{m<i} I_m (S_m - S_{m+1})
+        hist = 0.0
+        for m in range(i):
+            hist += cur[m] * (S[m] - S[m + 1])
+        hist *= 2.0 * pref
+        beta = 2.0 * S[i] * pref
+
+        eta = epot[i] - e0
+        k_red = min(CV_BV_K_MAX, k0 * safe_exp(-alpha * f_rt * eta))
+        k_ox = min(CV_BV_K_MAX, k0 * safe_exp((1.0 - alpha) * f_rt * eta))
+        denom = 1.0 + afac * beta * (k_ox + k_red)
+        i_amp = -afac * (k_red * c_bulk + (k_ox + k_red) * hist) / denom
+
+        # Mass-balance clamp, same fallback as buildQuasiReversibleCV.
+        theta_r = clamp(-(hist + beta * i_amp) / c_bulk, 0.0, 1.0)
+        c_r = theta_r * c_bulk
+        c_o = c_bulk - c_r
+        if theta_r <= 0.0 or theta_r >= 1.0:
+            i_amp = afac * (k_ox * c_r - k_red * c_o)
+        cur[i] = i_amp
+
+    return [(cur[f_i] * 1e6, cur[r_i] * 1e6) for f_i, r_i in zip(fwd_end, rev_end)]
+
+
+def swv_empirical(params: Dict[str, Any], prog: List[Dict[str, Any]]) -> List[Tuple[float, float]]:
+    """Legacy empirical Langmuir-Gaussian fallback (swvModel = "empirical")."""
+    ipk = swv_peak_current_ua(params["concentration"])
+    e_peak = params.get("formalPotential", SWV_EPEAK_V)
+    sigma = max(0.02, 0.03 + params["amplitude_mV"] / 4000.0)
+    out: List[Tuple[float, float]] = []
+    for s in prog:
+        E = s["E"]
+        base = 0.05 + 0.02 * E
+        i_net = ipk * math.exp(-0.5 * ((E - e_peak) / sigma) ** 2) + base
+        i_net += gaussian_noise(abs_sigma=0.01)
+        cbg = 0.05 + 0.01 * E
+        out.append((
+            cbg + 0.5 * (i_net - base) + gaussian_noise(abs_sigma=0.01),
+            cbg - 0.5 * (i_net - base) + gaussian_noise(abs_sigma=0.01),
+        ))
+    return out
+
+
+SWV_MODEL_IDS = {
+    "reversible": "reversible_diffusion_approx",
+    "quasi-reversible": "quasi_reversible_approx",
+    "empirical": "empirical_swv_peak_langmuir",
+}
+
+
+def simulate_swv(params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    prog = generate_swv_program(params)
+    model = params.get("swvModel", "reversible")
+    if model == "quasi-reversible":
+        currents = swv_quasi_reversible(params, prog)
+    elif model == "empirical":
+        currents = swv_empirical(params, prog)
+    else:
+        currents = swv_reversible_exact(params, prog)
+    return [
+        {**s, "IForward": i_f, "IReverse": i_r, "INet": i_f - i_r}
+        for s, (i_f, i_r) in zip(prog, currents)
+    ]
 
 
 async def loop_swv_simulado(params: Dict[str, Any]):
@@ -1197,50 +1464,35 @@ async def loop_swv_simulado(params: Dict[str, Any]):
 
 
 async def sweep_swv_simulado(params: Dict[str, Any]):
-    start_e = params["startE"]
-    end_e = params["endE"]
-    step_v = params["step_mV"] / 1000.0
-    amp_mv = params["amplitude_mV"]
     freq = params["frequency_Hz"]
     quiet = params["quietTime_s"]
     direction = params["direction"]
     concentration = params["concentration"]
-
-    n = int(math.floor(abs(end_e - start_e) / step_v + 1e-9)) + 1
-    ramp = 1 if end_e >= start_e else -1
-    ipk = swv_peak_current_ua(concentration)
-    e_peak = params.get("formalPotential", SWV_EPEAK_V)
-    sigma = max(0.02, 0.03 + amp_mv / 4000.0)
+    model = params.get("swvModel", "reversible")
     period = 1.0 / freq
 
-    print(f"[SIM-SWV] C={concentration} nM  Ipk={ipk:.3f} µA  n={n} pontos  dir={direction}")
     await broadcast({"type": "swv_status", "status": "running"})
-
     try:
+        # CPU-bound solve runs off the event loop (stop/ping stay responsive).
+        points = await asyncio.to_thread(simulate_swv, params)
+        print(f"[SIM-SWV] model={model} C={concentration} nM  n={len(points)} pontos  dir={direction}")
         await asyncio.sleep(min(quiet, 0.5))
-        for i in range(n):
-            E = start_e + ramp * i * step_v
-            base = 0.05 + 0.02 * E
-            i_net = ipk * math.exp(-0.5 * ((E - e_peak) / sigma) ** 2) + base
-            i_net += gaussian_noise(abs_sigma=0.01)
-            cbg = 0.05 + 0.01 * E
-            i_fwd = cbg + 0.5 * (i_net - base) + gaussian_noise(abs_sigma=0.01)
-            i_rev = cbg - 0.5 * (i_net - base) + gaussian_noise(abs_sigma=0.01)
+        for p in points:
             await broadcast({
                 "type": "swv_data",
-                "E": round(E, 6),
-                "IForward": round(i_fwd, 6),
-                "IReverse": round(i_rev, 6),
-                "INet": round(i_fwd - i_rev, 6),
-                "time": round(quiet + i * period, 6),
-                "index": i,
+                "E": round(p["E"], 6),
+                "IForward": round(p["IForward"], 6),
+                "IReverse": round(p["IReverse"], 6),
+                "INet": round(p["INet"], 6),
+                "time": round(p["time"], 6),
+                "index": p["index"],
                 "direction": direction,
                 "concentration": concentration,
-                "simulationModel": "empirical_langmuir_gaussian",
+                "simulationModel": SWV_MODEL_IDS[model],
             })
             await asyncio.sleep(max(0.005, period))
 
-        await broadcast({"type": "swv_done", "points": n})
+        await broadcast({"type": "swv_done", "points": len(points)})
         await broadcast({"type": "swv_status", "status": "done"})
         print("[SIM] SWV completo")
     except asyncio.CancelledError:
@@ -1602,8 +1854,8 @@ async def main(args):
         print(f"  Sim loop:  {'ON' if loop_simulated else 'OFF'}")
         print(f"  EIS:       Randles + Cdl || (Rct + Warburg), high→low frequency")
         print(f"  BioFET:    softplus/EKV-like transfer, 60 s time response, VgRead={FET_VG_READ} V")
-        print(f"  CV:        reversible diffusion/Nernst lightweight; quasi reversible approximate")
-        print(f"  SWV:       empirical Langmuir-Gaussian, mirrors frontend simulator")
+        print(f"  CV:        reversible diffusion/Nernst (2500 nodes); quasi-reversible Butler-Volmer")
+        print(f"  SWV:       exact reversible / graded sub-step quasi-reversible, mirrors frontend solvers")
         print(f"  Kd={KD_SIMULATED_NM} nM | Rct {RCT_BASELINE:.0f}-{RCT_MAX:.0f} Ω | Vt shift max {VT_MAX_SHIFT*1000:.0f} mV")
 
     elif operation_mode == "dados_reais":
