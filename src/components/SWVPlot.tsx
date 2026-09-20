@@ -39,8 +39,12 @@ interface Props {
   compact?: boolean;
 }
 
-const fmt = (v: unknown, unit: string, digits = 3) =>
-  typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(digits)} ${unit}` : "N/A";
+const fmt = (v: unknown, unit: string, digits = 3) => {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "N/A";
+  // Show tiny currents (nM analyte) in nA instead of a rounded 0.000 µA.
+  if (unit === "µA" && v !== 0 && Math.abs(v) < 0.01) return `${(v * 1000).toFixed(digits)} nA`;
+  return `${v.toFixed(digits)} ${unit}`;
+};
 
 /**
  * SWV plot — differential I_net vs E as the primary trace, with optional
@@ -83,12 +87,30 @@ export default function SWVPlot({
     }));
   }, [data, corrected, effectiveMode]);
 
+  // Tick precision follows the visible current span: nA-level scans (nM
+  // analyte) would otherwise print as 0.00 on every tick.
+  const ySpan = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const r of rows) {
+      if (Number.isFinite(r.INet)) {
+        lo = Math.min(lo, r.INet);
+        hi = Math.max(hi, r.INet);
+      }
+    }
+    return hi - lo;
+  }, [rows]);
+
   const [zoomArea, setZoomArea] = useState<{ x1: number; x2: number } | null>(null);
   const [zoomDomain, setZoomDomain] = useState<{
     x: [number, number];
     y: [number, number];
   } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
+  const visibleSpan = zoomDomain ? zoomDomain.y[1] - zoomDomain.y[0] : ySpan;
+  const yDecimals = visibleSpan > 0
+    ? Math.min(8, Math.max(2, Math.ceil(-Math.log10(visibleSpan / 5))))
+    : 2;
 
   const getX = (e: ChartMouseEvent | null | undefined): number | null => {
     if (!e) return null;
@@ -187,7 +209,7 @@ export default function SWVPlot({
             allowDataOverflow
             label={compact ? undefined : { value: "I / µA", angle: -90, position: "insideLeft" }}
             tick={{ fontSize: compact ? 9 : 11 }}
-            tickFormatter={(v: number) => v.toFixed(2)}
+            tickFormatter={(v: number) => v.toFixed(yDecimals)}
           />
           <Tooltip
             contentStyle={{
