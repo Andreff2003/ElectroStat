@@ -147,7 +147,7 @@ RS_CONSTANT = 200.0
 RCT_BASELINE = 300.0
 RCT_MAX = 800.0
 EIS_CDL_F = 20e-6
-EIS_WARBURG_AW = 18.0  # Ω·s^-1/2, intentionally modest for visible low-frequency tail
+EIS_WARBURG_AW = 80.0  # Ω·s^-1/2, same as AW_BASE in src/hooks/useSimulatedData.ts (concentration-independent)
 
 # BioFET simulation
 VT_BASELINE = 0.30
