@@ -226,11 +226,12 @@ export default function SWVPlot({
             dot={false}
             strokeWidth={2}
           />
+          {/* No Fragment here: Recharts does not pick up children wrapped in one. */}
           {showForwardReverse && (
-            <>
-              <Line type="monotone" dataKey="IForward" name="I forward" stroke="#10b981" dot={false} strokeWidth={1} />
-              <Line type="monotone" dataKey="IReverse" name="I reverse" stroke="#ef4444" dot={false} strokeWidth={1} />
-            </>
+            <Line type="monotone" dataKey="IForward" name="I forward" stroke="#10b981" dot={false} strokeWidth={1} />
+          )}
+          {showForwardReverse && (
+            <Line type="monotone" dataKey="IReverse" name="I reverse" stroke="#ef4444" dot={false} strokeWidth={1} />
           )}
           {showBaseline && (
             <Line type="monotone" dataKey="baseline" name="Baseline" stroke="#9ca3af" dot={false} strokeDasharray="4 4" />
