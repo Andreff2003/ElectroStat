@@ -8,7 +8,7 @@ import {
 
 /**
  * ============================================================
- * SIMULATED DATA HOOKS FOR HELPSTAT BIOSENSOR
+ * SIMULATED DATA HOOKS FOR THE ELECTROSTAT BIOSENSOR DASHBOARD
  * ============================================================
  * Curves change with the user-supplied "concentration" (nM)
  * using a Langmuir binding model.

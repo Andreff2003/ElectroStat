@@ -1048,7 +1048,7 @@ export function exportSessionCSV(
   sections.push(buildCalibrationSection(calibration));
   sections.push(buildActivitySection());
   const out = sections.join(BLANK);
-  downloadTSV(`helpstat_session_${Date.now()}.tsv`, out);
+  downloadTSV(`electrostat_session_${Date.now()}.tsv`, out);
 }
 
 export function exportCalibrationCSV(

@@ -199,11 +199,14 @@ export type StoredMeasurement =
   | StoredCVMeasurement
   | StoredSWVMeasurement;
 
-const KEY = "helpstat-session-v1";
+const KEY = "electrostat-session-v1";
+// The app used to be called HelpStat; read sessions saved under the old key so
+// upgrading does not drop the user's stored measurements.
+const LEGACY_KEY = "helpstat-session-v1";
 
 export function loadSession(): StoredMeasurement[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];

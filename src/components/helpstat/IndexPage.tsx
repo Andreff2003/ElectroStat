@@ -852,9 +852,9 @@ const Index = () => {
         vt != null ? vt.toFixed(3) : "n/a"
       } V, ΔVt=${deltaVt_mV != null ? deltaVt_mV.toFixed(1) + " mV" : "n/a"} (${metrics.vtMethod}; mode=${fetResponseMode})`,
     );
-    // Falls back to "Cortisol" when the logbook's Analyte field is blank
-    // (same default as the on-screen labels), so exported/stored data never
-    // has an empty analyte column.
+    // Falls back to the generic "Analyte" when the logbook's Analyte field is
+    // blank (same default as the on-screen labels), so exported/stored data
+    // never has an empty analyte column.
     const cleanFetNotes = sanitizeMeasurementNotes({ ...fetNotes, analyte: fetAnalyteName });
     const storedFet: StoredFETMeasurement = {
       id: newId(),
@@ -1850,9 +1850,9 @@ const Index = () => {
 
   // BioFET display label — sourced from the logbook's "Analyte" field (the
   // single place this is recorded) so charts/labels never disagree with what
-  // gets exported. "Cortisol" is only the fallback shown before the user
-  // types anything, matching the worked example the app ships with.
-  const fetAnalyteName = fetNotes.analyte || "Cortisol";
+  // gets exported. The app is analyte-agnostic, so before the user types
+  // anything the labels say just "Analyte".
+  const fetAnalyteName = fetNotes.analyte || "Analyte";
 
   // ── Start / stop for the currently visible technique (used by shortcuts) ──
   const startCurrentMode = () => {

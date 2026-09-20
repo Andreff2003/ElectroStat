@@ -1,6 +1,6 @@
 """
 ================================================================
-  HelpStat — bridge.py  (versão unificada atualizada — EIS, BioFET, CV e SWV)
+  ElectroStat — bridge.py  (versão unificada atualizada — EIS, BioFET, CV e SWV)
 ================================================================
   MODOS DISPONÍVEIS:
 
@@ -47,7 +47,7 @@
 ================================================================
   PROTOCOLO CV ESPERADO PELO FRONTEND
 ================================================================
-  O frontend HelpStat espera dados CV com:
+  O frontend ElectroStat espera dados CV com:
 
     {
       "type": "cv_data",
@@ -1845,7 +1845,7 @@ async def main(args):
     loop_simulated = bool(args.loop_sim)
 
     print("=" * 64)
-    print("  HelpStat — Bridge Unificado Atualizado")
+    print("  ElectroStat — Bridge Unificado Atualizado")
     print("=" * 64)
     print(f"  Modo:      {operation_mode}")
     print(f"  WebSocket: ws://127.0.0.1:{WS_PORT}")
@@ -1890,7 +1890,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="HelpStat — Bridge unificado atualizado",
+        description="ElectroStat — Bridge unificado atualizado",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Exemplos:
