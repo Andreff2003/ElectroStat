@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { EISDataPoint, FETTransferPoint } from "@/hooks/useSimulatedData";
+import { fetOnStateNoisePct } from "@/utils/fetNoise";
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
 import { computeCVSignalQuality, estimateCVStepMv } from "@/utils/cvSignalQuality";
@@ -316,22 +317,16 @@ function computeFETMetrics(analyte: FETTransferPoint[], baseline: FETTransferPoi
   }
   if (bestSlope > 0) ss = 1000 / bestSlope;
 
-  // 4. Baseline stability — std/|mean|% of off-cutoff region of the baseline.
-  //    NoiseFloor avoids division blow-up when meanOff ≈ 0.
+  // 4. Baseline noise — scatter of the baseline curve around its own smooth
+  //    on-state trend (see fetOnStateNoisePct). Both the old deep-off std/mean
+  //    (dominated by the exponential slope and by a fixed 0.05 µA floor) and
+  //    this one grade <5 % green, <15 % yellow.
   let stabilityNoisePct = 0;
   let stabilityLevel: Level = "idle";
-  if (baseline.length >= 5) {
-    const baseSorted = [...baseline].sort((a, b) => a.vg - b.vg);
-    const nDeep = Math.max(3, Math.floor(baseSorted.length * 0.1));
-    const deepRegion = baseSorted.slice(0, nDeep);
-    const deepIds = deepRegion.map((p) => p.id);
-    const meanOff = deepIds.reduce((a, b) => a + b, 0) / deepIds.length;
-    const variance = deepIds.reduce((a, b) => a + (b - meanOff) ** 2, 0) / deepIds.length;
-    const std = Math.sqrt(variance);
-    const noiseFloor = 0.05; // µA — below this, Id is at the simulated noise floor.
-    stabilityNoisePct = (100 * std) / Math.max(Math.abs(meanOff), noiseFloor);
-    stabilityLevel =
-      stabilityNoisePct < 5 ? "green" : stabilityNoisePct < 15 ? "yellow" : "red";
+  const noisePct = baseline.length >= 5 ? fetOnStateNoisePct(baseline) : null;
+  if (noisePct != null) {
+    stabilityNoisePct = noisePct;
+    stabilityLevel = noisePct < 5 ? "green" : noisePct < 15 ? "yellow" : "red";
   }
 
   const ionLevel: Level = ionIoff > 100 ? "green" : ionIoff > 20 ? "yellow" : "red";
@@ -445,15 +440,17 @@ interface MetricRowProps {
   label: string;
   value: string;
   level: Level;
+  /** Shown for information only: neutral dot, not part of the traffic light. */
+  informational?: boolean;
 }
 
-const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: string }) => (
+const MetricRow = ({ label, value, level, title, informational }: MetricRowProps & { title?: string }) => (
   <div className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0">
     <div className="flex items-center gap-2 min-w-0">
       <div
-        className={`w-2 h-2 rounded-full shrink-0 ${dotClass(level)}`}
+        className={`w-2 h-2 rounded-full shrink-0 ${informational ? "border border-muted-foreground/60" : dotClass(level)}`}
         role="img"
-        aria-label={`${label} status: ${LEVEL_TEXT[level]}`}
+        aria-label={informational ? `${label}: informational` : `${label} status: ${LEVEL_TEXT[level]}`}
       />
       <span className="text-[11px] font-mono text-muted-foreground truncate">
         {label}
@@ -479,14 +476,6 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
     fetVtBaseline != null && fetVtAnalyte != null && Number.isFinite(fetVtBaseline) && Number.isFinite(fetVtAnalyte)
       ? (fetVtAnalyte - fetVtBaseline) * 1000
       : null;
-  const deltaVtLevel: Level =
-    deltaVtMv == null
-      ? "idle"
-      : Math.abs(deltaVtMv) > 50
-        ? "green"
-        : Math.abs(deltaVtMv) > 10
-          ? "yellow"
-          : "red";
   const deltaVtStr =
     deltaVtMv == null
       ? "—"
@@ -580,7 +569,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         {mode === "fet" && (
           <>
             <MetricRow label="Ion / Ioff Ratio" title="On/off current ratio — higher means a cleaner switching response, independent of analyte binding. >100 green, >20 yellow, below that red." value={ready ? fetMetrics.ionIoff.toFixed(1) : pending} level={fetMetrics.ionLevel} />
-            <MetricRow label="ΔVt" title="Threshold voltage shift between baseline and analyte curves — the main signal for analyte binding, not an electrode-quality metric. >50 mV green, >10 mV yellow, smaller shifts red." value={deltaVtStr} level={deltaVtLevel} />
+            <MetricRow label="ΔVt" informational title="Threshold voltage shift between baseline and analyte curves: the analytical result (it grows with concentration and is legitimately ~0 on a blank), so it does not score the signal-quality light." value={deltaVtStr} level="idle" />
             <MetricRow
               label="Subthreshold Slope"
               title="How sharply current turns on with gate voltage. Lower = sharper response. <200 mV/dec green, <400 mV/dec yellow, above that red. Approximate (quadratic fit)."
@@ -589,7 +578,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             />
             <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
 
-            <MetricRow label="Baseline Noise" title="100·std/|mean| over the deep-off (low Vg) region of the baseline. <5% green, <15% yellow, else red." value={ready ? `${fetMetrics.baselineStability.toFixed(1)} %` : pending} level={fetMetrics.stabilityLevel} />
+            <MetricRow label="Baseline Noise" title="Scatter of the baseline curve around its smooth on-state trend (RMS of the residuals of a quadratic fit, as % of the mean current, on points above 30% of Ion). <5% green, <15% yellow, else red." value={ready && fetMetrics.stabilityLevel !== "idle" ? `${fetMetrics.baselineStability.toFixed(1)} %` : ready ? "—" : pending} level={fetMetrics.stabilityLevel} />
             {rangeInfo.anyFlagPresent && (
               <MetricRow
                 label="HSTIA Range"
