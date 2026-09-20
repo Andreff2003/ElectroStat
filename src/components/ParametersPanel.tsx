@@ -8,7 +8,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import type { SWVBaselineMethod, SWVParameters } from "@/types/swv";
+import type { SWVParameters } from "@/types/swv";
 import {
   CV_DEFAULT_D_CM2_S,
   CV_E0_PRIME_DEFAULT_V,
@@ -855,28 +855,6 @@ const ParametersPanel = ({
                 <option value="cathodic">cathodic</option>
               </select>
             </div>
-            <div className="flex flex-col gap-1">
-              <Label className="text-[10px] font-mono uppercase text-muted-foreground">
-                Baseline Method
-              </Label>
-              <select
-                disabled={disabled}
-                value={swvParams.baselineMethod ?? "auto"}
-                onChange={(e) =>
-                  onChangeSWV({
-                    ...swvParams,
-                    baselineMethod: e.target.value as SWVBaselineMethod,
-                  })
-                }
-                className="h-8 rounded-md border border-input bg-background px-2 font-mono text-xs"
-              >
-                <option value="none">none</option>
-                <option value="linear_edges">linear_edges</option>
-                <option value="polynomial">polynomial</option>
-                <option value="auto">auto</option>
-              </select>
-            </div>
-
             <div className="flex flex-col gap-1 col-span-2">
               <Label className="text-[10px] font-mono uppercase text-muted-foreground">
                 SWV Model

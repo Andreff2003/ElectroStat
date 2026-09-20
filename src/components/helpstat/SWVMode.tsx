@@ -34,6 +34,7 @@ import {
   validateSWVParameters,
 } from "@/utils/swvMetrics";
 import type {
+  SWVBaselineMethod,
   SWVDataPoint,
   SWVParameters,
 } from "@/types/swv";
@@ -477,6 +478,23 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
                 >
                   Baseline {showBaseline ? "ON" : "OFF"}
                 </Button>
+              </Hint>
+              <Hint text="Baseline subtraction method (re-analyses the current scan)">
+                <select
+                  value={params.baselineMethod ?? "auto"}
+                  onChange={(e) =>
+                    setParams({
+                      ...params,
+                      baselineMethod: e.target.value as SWVBaselineMethod,
+                    })
+                  }
+                  className="h-7 rounded-md border border-input bg-background px-2 font-mono text-[11px]"
+                >
+                  <option value="auto">Baseline: Auto</option>
+                  <option value="none">Baseline: None</option>
+                  <option value="linear_edges">Baseline: Linear edges</option>
+                  <option value="polynomial">Baseline: Polynomial</option>
+                </select>
               </Hint>
               <Hint text="Toggle raw (measured) vs baseline-subtracted I_net">
                 <Button
