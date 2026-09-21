@@ -748,7 +748,7 @@ function buildEISProcessedFitSection(o: EISExportFitOptions): string {
   const fitRangeMin = o.fitRangeMinHz ?? f?.fitFreqRange?.min ?? r?.fitFreqRange?.min;
   const fitRangeMax = o.fitRangeMaxHz ?? f?.fitFreqRange?.max ?? r?.fitFreqRange?.max;
   const fitSource = o.fitSource
-    ?? (model === "randles-cpe" ? "cnls_randles_cpe" : f ? "cnls_randles" : r?.auto ? "auto_cnls_randles" : r ? "manual_randles" : "geometric");
+    ?? (model === "randles-cpe" ? "cnls_randles_cpe" : model === "randles-warburg" ? "cnls_randles_warburg" : f ? "cnls_randles" : r?.auto ? "auto_cnls_randles" : r ? "manual_randles" : "geometric");
 
   const errPct = (name: string): string => {
     const e = f?.errors?.[name] ?? r?.errors?.[name];

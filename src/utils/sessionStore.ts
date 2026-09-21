@@ -56,7 +56,7 @@ export interface StoredEISMeasurement {
     deltaRct?: number;
     deltaRctNormPct?: number;
     warnFlags?: string[];
-    fitModel?: "randles" | "randles-cpe";
+    fitModel?: "randles" | "randles-cpe" | "randles-warburg";
     fitSource?:
       | "geometric"
       | "geometric_fallback"
@@ -64,8 +64,10 @@ export interface StoredEISMeasurement {
       | "manual_randles"
       | "cnls_randles"
       | "cnls_randles_cpe"
+      | "cnls_randles_warburg"
       | "manual_cnls_randles"
-      | "manual_cnls_randles_cpe";
+      | "manual_cnls_randles_cpe"
+      | "manual_cnls_randles_warburg";
     weightedSsrPerDof?: number;
     rmseWeightedPercent?: number;
     fitRangeMinHz?: number;

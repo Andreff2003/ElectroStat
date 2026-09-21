@@ -30,13 +30,21 @@ import type { EISDataPoint } from "@/hooks/useSimulatedData";
  *  treat the value as an order-of-magnitude indicator only.
  *
  *  Supported equivalent circuits:
- *    1. "randles"      Rs + (Rct // Cdl)
- *    2. "randles-cpe"  Rs + (Rct // CPE), Z_CPE = 1/(Q(jω)^n)
+ *    1. "randles"          Rs + (Rct // Cdl)
+ *    2. "randles-cpe"      Rs + (Rct // CPE), Z_CPE = 1/(Q(jω)^n)
+ *    3. "randles-warburg"  Rs + (Cdl // (Rct + Zw)), Zw = Aw(1 − j)/√ω
+ *
+ *  Models 1 and 2 describe the semicircle only: on a spectrum that also
+ *  contains a diffusion tail, Re(Zw) leaks into Rct and biases it upwards
+ *  (+5 % on the default simulated sweep). Model 3 carries the Warburg
+ *  element itself, so Rct is the charge-transfer resistance proper; it must
+ *  be fitted on the whole spectrum, not on the semicircle region only
+ *  (see `fitRegionFor`).
  * ============================================================
  */
 
 
-export type CircuitModel = "randles" | "randles-cpe";
+export type CircuitModel = "randles" | "randles-cpe" | "randles-warburg";
 
 export interface EISFitResult {
   model:        CircuitModel;
@@ -203,19 +211,73 @@ const MODEL_RANDLES_CPE: ModelDef = {
 };
 
 
-const MODELS: Record<CircuitModel, ModelDef> = {
-  "randles":     MODEL_RANDLES,
-  "randles-cpe": MODEL_RANDLES_CPE,
+// ─── Randles + Warburg: Rs + (Cdl // (Rct + Zw)) ─────────────
+// Semi-infinite Warburg, Zw = Aw/√ω · (1 − j), in series with Rct (the same
+// element the simulator uses). Aw in Ω/√s.
+const MODEL_RANDLES_WARBURG: ModelDef = {
+  paramNames: ["Rs", "Rct", "Cdl", "Aw"],
+  units:      { Rs: "Ω", Rct: "Ω", Cdl: "F", Aw: "Ω/√s" },
+  isLog:      [true, true, true, true],
+  isLogistic: [false, false, false, false],
+  initial: (d) => {
+    const s   = [...d].sort((a, b) => b.frequency - a.frequency);
+    const Rs  = Math.max(s[0].zReal, 1);
+    const low = s[s.length - 1];
+    // Low-frequency tail: −Z'' ≈ Aw/√ω (+ a Cdl term that is small there).
+    const Aw  = Math.max(-low.zImag * Math.sqrt(TWO_PI * Math.max(low.frequency, 1e-6)), 1e-3);
+    const Rct = Math.max(low.zReal - Rs - Aw / Math.sqrt(TWO_PI * Math.max(low.frequency, 1e-6)), 10);
+    const peak = s.reduce(
+      (b, p) => (Math.abs(p.zImag) > Math.abs(b.zImag) ? p : b),
+      s[0],
+    );
+    const Cdl = 1 / (TWO_PI * Math.max(peak.frequency, 1) * Math.max(Rct, 1));
+    return [Math.log(Rs), Math.log(Rct), Math.log(Cdl), Math.log(Aw)];
+  },
+  bounds: {
+    lower: [Math.log(0.01), Math.log(0.01), Math.log(1e-12), Math.log(1e-6)],
+    upper: [Math.log(1e6),  Math.log(1e9),  Math.log(1.0),   Math.log(1e6)],
+  },
+  Z: (lp, omega) => {
+    const Rs = Math.exp(lp[0]), Rct = Math.exp(lp[1]);
+    const Cdl = Math.exp(lp[2]), Aw = Math.exp(lp[3]);
+    const w  = Aw / Math.sqrt(omega);
+    // Faradaic branch Zf = Rct + w − j w ; admittance Y = 1/Zf + jωCdl
+    const zfRe = Rct + w, zfIm = -w;
+    const zf2  = zfRe * zfRe + zfIm * zfIm || 1e-30;
+    const yRe  = zfRe / zf2;
+    const yIm  = -zfIm / zf2 + omega * Cdl;
+    const y2   = yRe * yRe + yIm * yIm || 1e-30;
+    return { re: Rs + yRe / y2, im: -yIm / y2 };
+  },
 };
+
+const MODELS: Record<CircuitModel, ModelDef> = {
+  "randles":         MODEL_RANDLES,
+  "randles-cpe":     MODEL_RANDLES_CPE,
+  "randles-warburg": MODEL_RANDLES_WARBURG,
+};
+
+/**
+ * Data a model must be fitted on. The Randles models describe the semicircle
+ * only, so they get the semicircle region; Randles + Warburg contains the
+ * diffusion tail in the model and therefore needs the whole spectrum.
+ */
+export function fitRegionFor(
+  model: CircuitModel,
+  semicircle: EISDataPoint[],
+  full: EISDataPoint[],
+): EISDataPoint[] {
+  return model === "randles-warburg" ? full : semicircle;
+}
 
 export function getCircuitParamNames(m: CircuitModel): string[] {
   return MODELS[m].paramNames.slice();
 }
 
 export function getCircuitLabel(m: CircuitModel): string {
-  return m === "randles"
-    ? "Randles (Rs + Rct ∥ Cdl)"
-    : "Randles + CPE (Rs + Rct ∥ CPE)";
+  if (m === "randles") return "Randles (Rs + Rct ∥ Cdl)";
+  if (m === "randles-warburg") return "Randles + Warburg (Rs + Cdl ∥ (Rct + Zw))";
+  return "Randles + CPE (Rs + Rct ∥ CPE)";
 }
 
 // ─── Core fitter ─────────────────────────────────────────────
@@ -426,7 +488,9 @@ export function fitEIS(
     const v = -fit[i].zImag;
     if (v > peakVal) { peakVal = v; peakIdx = i; }
   }
-  if (N >= 3 && (peakIdx === 0 || peakIdx === N - 1)) {
+  // (Randles + Warburg is fitted on the whole spectrum, whose low-frequency
+  // tail can rise above the semicircle, so this check only applies to the others.)
+  if (model !== "randles-warburg" && N >= 3 && (peakIdx === 0 || peakIdx === N - 1)) {
     warnings.push("Semicircle peak not interior to selection — move separator RIGHT to include more of the arc");
   }
 
@@ -441,7 +505,7 @@ export function fitEIS(
   // (b) model peak frequency vs. observed peak frequency (≤1 decade)
   const fPeakObs = fit[peakIdx]?.frequency;
   let fPeakModel = NaN;
-  if (model === "randles") {
+  if (model === "randles" || model === "randles-warburg") {
     const Rct = paramsOut.Rct, Cdl = paramsOut.Cdl;
     if (Rct > 0 && Cdl > 0) fPeakModel = 1 / (TWO_PI * Rct * Cdl);
   } else {
@@ -449,7 +513,7 @@ export function fitEIS(
     if (Rct > 0 && Q > 0 && n > 0)
       fPeakModel = Math.pow(Q * Rct, -1 / n) / TWO_PI;
   }
-  if (Number.isFinite(fPeakModel) && fPeakObs && fPeakObs > 0) {
+  if (model !== "randles-warburg" && Number.isFinite(fPeakModel) && fPeakObs && fPeakObs > 0) {
     const decades = Math.abs(Math.log10(fPeakModel / fPeakObs));
     if (decades > 1)
       warnings.push(`Model peak (${fPeakModel.toExponential(2)}Hz) ≠ data peak (${fPeakObs.toExponential(2)}Hz) — geometry mismatch`);

@@ -93,7 +93,7 @@ import {
   type KKResult,
 } from "@/utils/randlesFit";
 import { linKKTest, type LinKKResult } from "@/utils/linKK";
-import { fitEIS, type CircuitModel, type EISFitResult } from "@/utils/eisFit";
+import { fitEIS, fitRegionFor, type CircuitModel, type EISFitResult } from "@/utils/eisFit";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -123,6 +123,15 @@ import {
   type FETOverlayCurve,
   type DashStatus,
 } from "@/components/helpstat/indexPageHelpers";
+
+/** fit_source label stored for a CNLS fit the operator ran by hand. */
+function manualCnlsSource(
+  model: CircuitModel,
+): "manual_cnls_randles" | "manual_cnls_randles_cpe" | "manual_cnls_randles_warburg" {
+  if (model === "randles-cpe") return "manual_cnls_randles_cpe";
+  if (model === "randles-warburg") return "manual_cnls_randles_warburg";
+  return "manual_cnls_randles";
+}
 
 const Index = () => {
   const [mode, setMode] = useState<"eis" | "fet" | "cv" | "swv" | "dashboard">("eis");
@@ -486,7 +495,7 @@ const Index = () => {
     // automatic detection look broken. Re-fitting manually still works and
     // simply replaces this result.
     const autoCnls = autoSemiCircle.length >= 4
-      ? fitEIS(autoSemiCircle, circuitModel, finalData)
+      ? fitEIS(fitRegionFor(circuitModel, autoSemiCircle, finalData), circuitModel, finalData)
       : null;
     setRandlesFit(autoFit);
     setWarburg(autoWb);
@@ -638,7 +647,7 @@ const Index = () => {
     // because the discrete Hilbert transform is unreliable at low frequencies.
     const kkRes = kramersKronigTest(semi.length >= 5 ? semi : finalData);
     const linKKRes = linKKTest(finalData);
-    const cnls = fitEIS(semi, circuitModel, finalData);
+    const cnls = fitEIS(fitRegionFor(circuitModel, semi, finalData), circuitModel, finalData);
     setRandlesFit(fit);
     setWarburg(wb);
     setKk(kkRes);
@@ -680,9 +689,7 @@ const Index = () => {
       }
       const fitSource: NonNullable<StoredEISMeasurement["extracted"]["fitSource"]> =
         cnls
-          ? circuitModel === "randles-cpe"
-            ? "manual_cnls_randles_cpe"
-            : "manual_cnls_randles"
+          ? manualCnlsSource(circuitModel)
           : fit
             ? "manual_randles"
             : "geometric";
@@ -695,7 +702,7 @@ const Index = () => {
           Cdl: cnls?.params.Cdl ?? fit?.Cdl ?? target.extracted.Cdl,
           Q: cnls?.params.Q,
           n: cnls?.params.n,
-          Aw: wb?.Aw ?? fit?.Aw ?? target.extracted.Aw,
+          Aw: cnls?.params.Aw ?? wb?.Aw ?? fit?.Aw ?? target.extracted.Aw,
           warburgAw: wb?.Aw,
           warburgSlope: wb?.slope,
           warburgR2: wb?.r2Imag,
@@ -2153,7 +2160,7 @@ const Index = () => {
                 warburg,
                 fitRangeMinHz: cnlsFit?.fitFreqRange?.min ?? randlesFit?.fitFreqRange?.min,
                 fitRangeMaxHz: cnlsFit?.fitFreqRange?.max ?? randlesFit?.fitFreqRange?.max,
-                fitSource: cnlsFit ? (circuitModel === "randles-cpe" ? "manual_cnls_randles_cpe" : "manual_cnls_randles") : randlesFit?.auto ? "auto_cnls_randles" : randlesFit ? "manual_randles" : "geometric",
+                fitSource: cnlsFit ? manualCnlsSource(circuitModel) : randlesFit?.auto ? "auto_cnls_randles" : randlesFit ? "manual_randles" : "geometric",
               })} disabled={eisData.length === 0} className="font-mono text-xs">⬇ Export CSV</Button>
             </>
           )}
@@ -2414,6 +2421,9 @@ const Index = () => {
                     </SelectItem>
                     <SelectItem value="randles-cpe" className="font-mono text-xs">
                       Randles + CPE
+                    </SelectItem>
+                    <SelectItem value="randles-warburg" className="font-mono text-xs">
+                      Randles + Warburg
                     </SelectItem>
                   </SelectContent>
                 </Select>

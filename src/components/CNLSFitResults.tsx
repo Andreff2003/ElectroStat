@@ -170,7 +170,8 @@ const CNLSFitResults = ({ fit, model, randlesFit, warburg, kk, linKK }: Props) =
       </div>
 
       {/* Aw card or "no Warburg" notice */}
-      {hasWarburg && Number.isFinite(awValue ?? NaN) ? (
+      {/* With Randles + Warburg the fitted Aw is already in the parameter list above. */}
+      {model === "randles-warburg" ? null : hasWarburg && Number.isFinite(awValue ?? NaN) ? (
         <div className="flex items-center justify-between bg-secondary rounded-md p-2">
           <div className="flex flex-col">
             <span className="text-[10px] font-mono text-muted-foreground uppercase">
