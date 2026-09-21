@@ -313,14 +313,10 @@ const CVCalibrationPanel = ({
           <span className="text-primary">
             {summary.lod_mM != null ? `${summary.lod_mM.toFixed(4)} mM` : "—"}
           </span>
-          {summary.sigmaSource === "blank-replicates" && (
-            <span className="text-muted-foreground"> · from blank replicates ({summary.nBlankReplicates})</span>
-          )}
-          {summary.sigmaSource === "fit-residual" && (
-            <span className="text-muted-foreground"> · from calibration residuals (blank replicates recommended)</span>
-          )}
-          {summary.sigmaSource === "none" && (
-            <span className="text-muted-foreground"> · unavailable — add blank replicates or ≥3 fit points</span>
+          {summary.lod_mM != null && (
+            <span className="text-muted-foreground">
+              {" "}· σ from {summary.sigmaSource === "blank-replicates" ? "blank replicates" : "residuals"}
+            </span>
           )}
         </div>
         <div>
