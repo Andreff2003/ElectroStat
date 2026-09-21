@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { Beaker, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoHint } from "@/components/InfoHint";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -127,7 +128,9 @@ const CVCalibrationPanel = ({
       ? "text-graph-eis"
       : summary.quality === "yellow"
         ? "text-yellow-500"
-        : "text-destructive";
+        : summary.quality === "idle"
+          ? "text-muted-foreground"
+          : "text-destructive";
 
   return (
     <div className="rounded-lg border border-border bg-card p-3 space-y-3">
@@ -291,22 +294,22 @@ const CVCalibrationPanel = ({
 
       <div className="rounded-md bg-secondary/60 p-2 text-xs font-mono text-foreground space-y-0.5">
         <div>
-          slope:{" "}
+          Sensitivity<InfoHint text="Slope of the linear calibration fit (peak current vs concentration)." />:{" "}
           <span className="text-primary">
             {summary.fit ? `${summary.fit.slope.toFixed(4)} µA/mM` : "—"}
           </span>
         </div>
         <div>
-          intercept:{" "}
+          Intercept<InfoHint text="Fitted current at C = 0 (b in I = m·C + b). It should sit close to the blank response; a large value points to background current or a poor blank." />:{" "}
           <span className="text-primary">
             {summary.fit ? `${summary.fit.intercept.toFixed(3)} µA` : "—"}
           </span>
         </div>
         <div>
-          R²: <span className="text-primary">{summary.fit ? summary.fit.r2.toFixed(4) : "—"}</span>
+          R²<InfoHint text="Coefficient of determination for the calibration fit. Closer to 1.0 indicates the model explains the concentration-response relationship well." />: <span className="text-primary">{summary.fit ? summary.fit.r2.toFixed(4) : "—"}</span>
         </div>
         <div>
-          LOD:{" "}
+          LOD (3σ/|slope|)<InfoHint text="Limit of Detection = 3σ(blank) / slope. The lowest concentration reliably distinguishable from a blank measurement." />:{" "}
           <span className="text-primary">
             {summary.lod_mM != null ? `${summary.lod_mM.toFixed(4)} mM` : "—"}
           </span>
@@ -321,7 +324,7 @@ const CVCalibrationPanel = ({
           )}
         </div>
         <div>
-          LOQ:{" "}
+          LOQ (10σ/|slope|)<InfoHint text="Limit of Quantitation = 10σ(blank) / slope. The lowest concentration that can be quantified with acceptable precision." />:{" "}
           <span className="text-primary">
             {summary.loq_mM != null ? `${summary.loq_mM.toFixed(4)} mM` : "—"}
           </span>
@@ -330,7 +333,8 @@ const CVCalibrationPanel = ({
           points: {summary.nPoints} · unique C: {summary.nUniqueConcentrations} · blanks: {summary.nBlankReplicates}
         </div>
         <div>
-          quality: <span className={`uppercase ${qualityColor}`}>{summary.quality}</span>
+          quality<InfoHint text="At-a-glance verdict combining R², a positive slope, and point count. Green requires ≥5 points, R² ≥ 0.995 and an LOD. Yellow needs ≥3 points and R² ≥ 0.98." />:{" "}
+          <span className={`uppercase ${qualityColor}`}>{summary.quality === "idle" ? "—" : summary.quality}</span>
           {summary.qualityReasons.length > 0 && (
             <span className="text-muted-foreground"> · {summary.qualityReasons.join(" · ")}</span>
           )}

@@ -438,9 +438,13 @@ const CalibrationPanel = ({
   // calibration points span into the saturating region.
   const effectiveFit = useMemo(() => {
     if (mode === "swv") {
-      return linear ? { slope: linear.slope, r2: linear.r2, nPoints: linear.nPoints } : null;
+      return linear
+        ? { slope: linear.slope, r2: linear.r2, nPoints: linear.nPoints, intercept: linear.intercept as number | null }
+        : null;
     }
-    return fit ? { slope: fit.sMax / fit.kd, r2: fit.r2, nPoints: transformedPoints.length } : null;
+    return fit
+      ? { slope: fit.sMax / fit.kd, r2: fit.r2, nPoints: transformedPoints.length, intercept: null as number | null }
+      : null;
   }, [mode, linear, fit, transformedPoints.length]);
   const lodResult = useMemo(
     () =>
@@ -463,7 +467,11 @@ const CalibrationPanel = ({
     const slope = effectiveFit?.slope ?? 0;
     if (!effectiveFit || slope <= 0) reasons.push("slope ≤ 0");
     if (n < 3) reasons.push(`only ${n} usable point${n === 1 ? "" : "s"}`);
-    let level: "green" | "yellow" | "red";
+    let level: "green" | "yellow" | "red" | "idle";
+    if (points.length === 0) {
+      // Nothing measured yet: no verdict (a red "slope <= 0" here would be misleading).
+      return { level: "idle" as const, reasons: ["add calibration measurements"] };
+    }
     if (n >= 5 && r2 >= 0.995 && slope > 0 && lod != null) {
       level = "green";
     } else if (n >= 3 && r2 >= 0.98 && slope > 0) {
@@ -474,9 +482,15 @@ const CalibrationPanel = ({
       if (effectiveFit && r2 < 0.98) reasons.push(`R² = ${r2.toFixed(3)} below 0.98`);
     }
     return { level, reasons };
-  }, [effectiveFit, lod]);
+  }, [effectiveFit, lod, points.length]);
   const qualityColor =
-    quality.level === "green" ? "text-graph-eis" : quality.level === "yellow" ? "text-yellow-500" : "text-destructive";
+    quality.level === "green"
+      ? "text-graph-eis"
+      : quality.level === "yellow"
+        ? "text-yellow-500"
+        : quality.level === "idle"
+          ? "text-muted-foreground"
+          : "text-destructive";
 
   // Build smooth Langmuir curve points using fit
   const fitCurve = useMemo(() => {
@@ -831,6 +845,14 @@ const CalibrationPanel = ({
             {effectiveFit ? `${effectiveFit.slope.toFixed(3)} ${displayUnit}/nM` : "—"}
           </span>
         </div>
+        {mode === "swv" && (
+          <div>
+            Intercept<InfoHint text="Fitted signal at C = 0 (b in signal = m·C + b), from the positive-concentration points. Compare it with the measured blank: a large gap points to background or a poor blank." />:{" "}
+            <span className="text-primary">
+              {effectiveFit?.intercept != null ? `${effectiveFit.intercept.toFixed(3)} ${displayUnit}` : "—"}
+            </span>
+          </div>
+        )}
         <div>
           R²<InfoHint text="Coefficient of determination for the calibration fit. Closer to 1.0 indicates the model explains the concentration-response relationship well." />:{" "}
           <span className="text-primary">{effectiveFit ? effectiveFit.r2.toFixed(4) : "—"}</span>
@@ -848,7 +870,7 @@ const CalibrationPanel = ({
         </div>
         <div>
           quality<InfoHint text="At-a-glance verdict combining R², a positive slope, and point count. Green requires ≥5 points, R² ≥ 0.995 and an LOD. Yellow needs ≥3 points and R² ≥ 0.98." />:{" "}
-          <span className={`uppercase ${qualityColor}`}>{quality.level}</span>
+          <span className={`uppercase ${qualityColor}`}>{quality.level === "idle" ? "—" : quality.level}</span>
           {quality.reasons.length > 0 && (
             <span className="text-muted-foreground"> · {quality.reasons.join(" · ")}</span>
           )}

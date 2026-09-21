@@ -154,7 +154,8 @@ export function randlesSevcikIpUA(opts: {
   return ipA * 1e6;
 }
 
-export type CVCalibrationQuality = "green" | "yellow" | "red";
+/** "idle" = no measurements yet: nothing to judge, so no verdict. */
+export type CVCalibrationQuality = "green" | "yellow" | "red" | "idle";
 export type CVSigmaSource = "blank-replicates" | "fit-residual" | "none";
 
 export interface CVCalibrationSummary {
@@ -204,16 +205,21 @@ export function summarizeCalibration(
   let quality: CVCalibrationQuality = "red";
   const r2 = fit?.r2 ?? 0;
   const n = fit?.nPoints ?? 0;
-  if (slope <= 0) reasons.push("slope ≤ 0");
-  if (n < 3) reasons.push(`only ${n} usable points`);
-  if (n >= 5 && r2 >= 0.995 && slope > 0 && lod != null) {
-    quality = "green";
-  } else if (n >= 3 && r2 >= 0.98 && slope > 0) {
-    quality = "yellow";
-    if (lod == null) reasons.push("LOD requires blank replicates or ≥3 fit points");
+  if (points.length === 0) {
+    quality = "idle";
+    reasons.push("add calibration measurements");
   } else {
-    quality = "red";
-    if (r2 < 0.98) reasons.push(`R² = ${r2.toFixed(3)} below 0.98`);
+    if (slope <= 0) reasons.push("slope ≤ 0");
+    if (n < 3) reasons.push(`only ${n} usable points`);
+    if (n >= 5 && r2 >= 0.995 && slope > 0 && lod != null) {
+      quality = "green";
+    } else if (n >= 3 && r2 >= 0.98 && slope > 0) {
+      quality = "yellow";
+      if (lod == null) reasons.push("LOD requires blank replicates or ≥3 fit points");
+    } else {
+      quality = "red";
+      if (r2 < 0.98) reasons.push(`R² = ${r2.toFixed(3)} below 0.98`);
+    }
   }
   const uniqueC = new Set(points.map((p) => p.concentration_mM)).size;
   return {
