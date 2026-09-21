@@ -217,7 +217,7 @@ const CVCalibrationPanel = ({
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[10px] font-mono uppercase text-muted-foreground">
-            Calibration Curve — response vs C ({RESPONSE_LABEL[responseMode]})
+            Calibration Curve
           </span>
           {summary.fit && (
             <span className="text-[10px] font-mono text-primary">
@@ -228,7 +228,7 @@ const CVCalibrationPanel = ({
         <div className="h-[180px] bg-background rounded-md border border-border p-1">
           {chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-[11px] font-mono text-muted-foreground">
-              No calibration points yet
+              No measurements yet
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
@@ -340,7 +340,7 @@ const CVCalibrationPanel = ({
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-[10px] font-mono uppercase text-muted-foreground">
-            Points ({points.length})
+            Measurements ({points.length})
           </span>
           <div className="flex gap-1">
             <Button
@@ -373,7 +373,7 @@ const CVCalibrationPanel = ({
               {sortedPoints.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={9} className="text-[11px] font-mono text-muted-foreground py-3 text-center">
-                    No calibration points yet
+                    No measurements yet
                   </TableCell>
                 </TableRow>
               ) : (
