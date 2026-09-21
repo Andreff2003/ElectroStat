@@ -60,16 +60,14 @@ describe("fetOnStateNoisePct", () => {
   });
 });
 
-describe("SignalQuality BioFET — Baseline Noise and ΔVt", () => {
-  const renderFet = (base: FETTransferPoint[], dVt = 0.1) =>
+describe("SignalQuality BioFET — Baseline Noise", () => {
+  const renderFet = (base: FETTransferPoint[]) =>
     render(
       createElement(SignalQuality, {
         mode: "fet",
         eisData: [],
         fetBaseline: base,
         fetAnalyte: base,
-        fetVtBaseline: 0.3,
-        fetVtAnalyte: 0.3 + dVt,
       }),
     );
 
@@ -83,11 +81,5 @@ describe("SignalQuality BioFET — Baseline Noise and ΔVt", () => {
     renderFet(curve(0.3, 0.005, 3));
     expect(screen.getByRole("img", { name: "Baseline Noise status: poor" })).toBeInTheDocument();
     expect(screen.getByText("Poor Signal")).toBeInTheDocument();
-  });
-
-  it("ΔVt is informational: no colour status, and a blank does not change the light", () => {
-    renderFet(curve(0.02, 0.005, 3), 0);
-    expect(screen.getByRole("img", { name: "ΔVt: informational" })).toBeInTheDocument();
-    expect(screen.getByText("Good Signal")).toBeInTheDocument();
   });
 });

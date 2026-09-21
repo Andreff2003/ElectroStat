@@ -43,8 +43,6 @@ interface SignalQualityProps {
   linKKResidualPct?: number | null;
   /** Lin-KK passed flag (RMS ≤ 5%). */
   linKKPassed?: boolean | null;
-  fetVtBaseline?: number | null;
-  fetVtAnalyte?: number | null;
   cvMetrics?: CVMetrics | null;
   cvNElectrons?: number;
   /** Raw CV points — used only to check the outOfRange flag on live data. */
@@ -440,17 +438,15 @@ interface MetricRowProps {
   label: string;
   value: string;
   level: Level;
-  /** Shown for information only: neutral dot, not part of the traffic light. */
-  informational?: boolean;
 }
 
-const MetricRow = ({ label, value, level, title, informational }: MetricRowProps & { title?: string }) => (
+const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: string }) => (
   <div className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0">
     <div className="flex items-center gap-2 min-w-0">
       <div
-        className={`w-2 h-2 rounded-full shrink-0 ${informational ? "border border-muted-foreground/60" : dotClass(level)}`}
+        className={`w-2 h-2 rounded-full shrink-0 ${dotClass(level)}`}
         role="img"
-        aria-label={informational ? `${label}: informational` : `${label} status: ${LEVEL_TEXT[level]}`}
+        aria-label={`${label} status: ${LEVEL_TEXT[level]}`}
       />
       <span className="text-[11px] font-mono text-muted-foreground truncate">
         {label}
@@ -462,7 +458,7 @@ const MetricRow = ({ label, value, level, title, informational }: MetricRowProps
 );
 
 
-const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, fetVtBaseline, fetVtAnalyte, cvMetrics, cvNElectrons = 1, cvData, swvData, swvMetrics }: SignalQualityProps) => {
+const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, cvMetrics, cvNElectrons = 1, cvData, swvData, swvMetrics }: SignalQualityProps) => {
   const eisMetrics = useMemo(
     () => computeEISMetrics(eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed),
     [eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed],
@@ -471,15 +467,6 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
     () => computeFETMetrics(fetAnalyte, fetBaseline),
     [fetAnalyte, fetBaseline]
   );
-
-  const deltaVtMv =
-    fetVtBaseline != null && fetVtAnalyte != null && Number.isFinite(fetVtBaseline) && Number.isFinite(fetVtAnalyte)
-      ? (fetVtAnalyte - fetVtBaseline) * 1000
-      : null;
-  const deltaVtStr =
-    deltaVtMv == null
-      ? "—"
-      : `${deltaVtMv >= 0 ? "+" : ""}${deltaVtMv.toFixed(0)} mV`;
 
   const cvStepMv = useMemo(() => estimateCVStepMv(cvData), [cvData]);
   const cvLevels = useMemo(
@@ -569,7 +556,6 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         {mode === "fet" && (
           <>
             <MetricRow label="Ion / Ioff Ratio" title="On/off current ratio — higher means a cleaner switching response, independent of analyte binding. >100 green, >20 yellow, below that red." value={ready ? fetMetrics.ionIoff.toFixed(1) : pending} level={fetMetrics.ionLevel} />
-            <MetricRow label="ΔVt" informational title="Threshold voltage shift between baseline and analyte curves: the analytical result (it grows with concentration and is legitimately ~0 on a blank), so it does not score the signal-quality light." value={deltaVtStr} level="idle" />
             <MetricRow
               label="Subthreshold Slope"
               title="How sharply current turns on with gate voltage. Lower = sharper response. <200 mV/dec green, <400 mV/dec yellow, above that red. Approximate (quadratic fit)."

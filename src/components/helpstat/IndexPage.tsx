@@ -2727,7 +2727,7 @@ const Index = () => {
           )}
         </div>
         <div className="space-y-4">
-          <SignalQuality mode="fet" eisData={sqEisData} fetBaseline={sqFetBaseline} fetAnalyte={sqFetAnalyte} fetVtBaseline={liveFetVtBaseline} fetVtAnalyte={liveFetVt} />
+          <SignalQuality mode="fet" eisData={sqEisData} fetBaseline={sqFetBaseline} fetAnalyte={sqFetAnalyte} />
           <MeasurementNotesPanel
             mode="fet"
             value={fetNotes}

@@ -40,8 +40,8 @@ function transferCurve(vt: number, npts = 51): FETTransferPoint[] {
   return out;
 }
 
-describe("SignalQuality — BioFET overall vs ΔVt", () => {
-  it("keeps the overall semaphore green even when ΔVt's own row is red — ΔVt is the biological result (may legitimately be small), not an electrode-quality metric", () => {
+describe("SignalQuality — BioFET lists only electrode-quality criteria", () => {
+  it("has no ΔVt row: ΔVt is the analytical result (legitimately ~0 on a blank) and lives in the calibration panel", () => {
     const curve = transferCurve(0.5);
     render(
       <SignalQuality
@@ -49,16 +49,14 @@ describe("SignalQuality — BioFET overall vs ΔVt", () => {
         eisData={[]}
         fetBaseline={curve}
         fetAnalyte={curve}
-        fetVtBaseline={0.3}
-        fetVtAnalyte={0.307} // 7 mV shift: |7| is not > 10 → red on its own row
       />,
     );
 
     expect(screen.getByText("Good Signal")).toBeInTheDocument();
-    expect(screen.getByText("+7 mV")).toBeInTheDocument();
+    expect(screen.queryByText("ΔVt")).toBeNull();
   });
 
-  it("turns the overall semaphore red when an actual electrode-quality metric is bad, independent of ΔVt", () => {
+  it("turns the overall semaphore red when an actual electrode-quality metric is bad", () => {
     // Off-region current far above the clean-electrode threshold (Ioff < 1 µA
     // for green, red at >= 5 µA) — a genuinely leaky baseline, not biology.
     const noisyBaseline: FETTransferPoint[] = transferCurve(0.5).map((p) => ({
@@ -72,13 +70,10 @@ describe("SignalQuality — BioFET overall vs ΔVt", () => {
         eisData={[]}
         fetBaseline={noisyBaseline}
         fetAnalyte={noisyBaseline}
-        fetVtBaseline={0.3}
-        fetVtAnalyte={0.36} // 60 mV shift → green on its own row
       />,
     );
 
     expect(screen.getByText("Poor Signal")).toBeInTheDocument();
-    expect(screen.getByText("+60 mV")).toBeInTheDocument();
   });
 });
 
