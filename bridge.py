@@ -153,10 +153,9 @@ EIS_WARBURG_AW = 80.0  # Ω·s^-1/2, same as AW_BASE in src/hooks/useSimulatedDa
 VT_BASELINE = 0.30
 VT_MAX_SHIFT = 0.40
 FET_TEMP_K = 298.15
-FET_THERMAL_V = 0.0256926  # V at 298 K
+FET_THERMAL_V = 0.02585  # V (kT/q at 300 K), same as KT_Q_300K in src/utils/fetModel.ts
 FET_SUBTHRESHOLD_N = 1.6
 FET_ID_SCALE_UA = 1.35
-FET_IOFF_UA = 0.01
 FET_VG_READ = 1.0
 FET_SAMPLE_TIME_S = 10.0
 FET_TIME_DURATION_S = 60.0
@@ -711,16 +710,24 @@ def fet_delta_vt(concentration_nm: float, kd_nm: float, delta_vt_max: float) -> 
     return langmuir(concentration_nm, delta_vt_max, kd_nm)
 
 
-def fet_drain_current_ua(vg: float, vt: float, id_max_ua: float, ideality_n: float) -> float:
-    """Smooth EKV-like educational BioFET transfer model, Id in µA.
-    id_max_ua sets the saturation scale; ideality_n is the subthreshold
-    slope factor (1 = ideal MOSFET, higher = more sluggish turn-on)."""
-    slope_v = 2.0 * ideality_n * FET_THERMAL_V
-    u = (vg - vt) / max(slope_v, 1e-12)
-    return FET_IOFF_UA + id_max_ua * log1p_exp(u) ** 2
+def fet_k_ua_per_v2(id_max_ua: float, vg_top: float, vt_baseline: float) -> float:
+    """Transconductance K (µA/V²) chosen so the baseline curve reaches exactly
+    id_max_ua at vg_top, as in useSimulatedFETTransfer (K = idMax / (vgMax - Vt)²).
+    Without this normalisation "Id Max" only scaled the softplus² and the top of
+    the sweep came out ~100x larger than the browser simulator."""
+    return id_max_ua / max((vg_top - vt_baseline) ** 2, 1e-12)
 
 
-def add_fet_current_noise(id_ua: float, rel_noise: float = 0.012, abs_noise: float = 0.004) -> float:
+def fet_drain_current_ua(vg: float, vt: float, k_ua_per_v2: float, ideality_n: float) -> float:
+    """Softplus-smoothed MOSFET model (src/utils/fetModel.ts), Id in µA:
+    Id = K * (2 n VT * softplus((Vg - Vt) / (2 n VT)))². ideality_n is the
+    subthreshold slope factor (1 = ideal MOSFET, higher = more sluggish turn-on)."""
+    slope_v = max(2.0 * ideality_n * FET_THERMAL_V, 1e-12)
+    s = slope_v * log1p_exp((vg - vt) / slope_v)
+    return k_ua_per_v2 * s * s
+
+
+def add_fet_current_noise(id_ua: float, rel_noise: float = 0.02, abs_noise: float = 0.005) -> float:
     noisy = id_ua + gaussian_noise(abs_sigma=abs_noise, rel_sigma=rel_noise, value=id_ua)
     return max(noisy, 1e-6)
 
@@ -763,6 +770,10 @@ async def sweep_fet_simulado(params: dict):
 
     delta_vt = fet_delta_vt(concentration, kd_nm, delta_vt_max)
     vt_analyte = vt_baseline + delta_vt
+    # Same K as the browser: sweep top for the transfer curve, fixed 1.5 V
+    # reference for the time response (see useSimulatedFETTime).
+    k_transfer = fet_k_ua_per_v2(id_max_ua, vg_max, vt_baseline)
+    k_time = fet_k_ua_per_v2(id_max_ua, 1.5, vt_baseline)
     print(f"[SIM-FET] C={concentration} nM  Kd={kd_nm}nM  Vt(base)={vt_baseline:.3f} V  "
           f"Vt(analyte)={vt_analyte:.3f} V  ΔVt={delta_vt*1000:.1f} mV  idMax={id_max_ua}uA  n={ideality_n}")
     await broadcast({"type": "fet_status", "status": "running"})
@@ -784,7 +795,7 @@ async def sweep_fet_simulado(params: dict):
         ("analyte", vt_analyte, concentration, delta_vt * 1000.0),
     ]:
         for vg in vg_values():
-            id_ua = add_fet_current_noise(fet_drain_current_ua(vg, vt, id_max_ua, ideality_n))
+            id_ua = add_fet_current_noise(fet_drain_current_ua(vg, vt, k_transfer, ideality_n))
             await broadcast({
                 "type": "fet_transfer",
                 "curve": curve,
@@ -809,8 +820,8 @@ async def sweep_fet_simulado(params: dict):
             dvt_t = delta_vt * (1.0 - math.exp(-(t - injection_time_s) / max(binding_tau_s, 1e-9)))
         vt_t = vt_baseline + dvt_t
         id_ua = add_fet_current_noise(
-            fet_drain_current_ua(readout_bias_v, vt_t, id_max_ua, ideality_n),
-            rel_noise=0.01, abs_noise=0.003,
+            fet_drain_current_ua(readout_bias_v, vt_t, k_time, ideality_n),
+            rel_noise=0.01, abs_noise=0.05,
         )
         await broadcast({
             "type": "fet_time",
