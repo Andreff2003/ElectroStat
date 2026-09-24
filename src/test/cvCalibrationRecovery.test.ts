@@ -39,6 +39,20 @@ const SOLVER_DEFAULTS = {
 };
 const CONCS = [0, 0, 0, 0.5, 1, 2, 5, 10];
 
+describe("CV peak current follows the square root of the scan rate", () => {
+  it("each fourfold increase (25 -> 100 -> 400 mV/s) doubles the cathodic peak; dEp and D_apparent do not move", () => {
+    const run = (v: number) => {
+      const pts = simulateReversibleDiffusionCV({ ...SOLVER_DEFAULTS, scanRate_mVs: v, cMM: 5 });
+      return computeCVMetrics(pts, { scanRate_mVs: v, n: 1, cMM: 5, areaCm2: A })!;
+    };
+    const m25 = run(25), m100 = run(100), m400 = run(400);
+    expect(m100.IpcCorrected / m25.IpcCorrected).toBeCloseTo(2, 2);
+    expect(m400.IpcCorrected / m100.IpcCorrected).toBeCloseTo(2, 2);
+    expect(Math.abs(m25.deltaEp - m400.deltaEp)).toBeLessThan(1);
+    expect(Math.abs(m25.D_apparent / m400.D_apparent - 1)).toBeLessThan(0.01);
+  });
+});
+
 describe("CV calibration recovers the Randles-Sevcik sensitivity across a concentration series", () => {
   it("noise-free: exact line (R2=1), slope within 3% of the theoretical cathodic sensitivity", () => {
     const pts = CONCS.map((c) => {
