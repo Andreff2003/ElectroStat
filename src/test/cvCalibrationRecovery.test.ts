@@ -74,22 +74,38 @@ describe("CV calibration recovers the Randles-Sevcik sensitivity across a concen
     expect(relErr).toBeLessThan(0.05);
   });
 
-  it("with +-0.5 uA injected noise: still linear (R2>0.999), finite LOD/LOQ, quality green", () => {
-    const pts = CONCS.map((c, i) => {
-      const clean = simulateReversibleDiffusionCV({ ...SOLVER_DEFAULTS, cMM: c });
-      const noisy = withNoise(clean, 0.5, 777 + i);
-      const m = computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM: c, areaCm2: A });
-      return buildCVCalibrationPoint(c, m, "reversible");
+  it("with +-0.5 uA injected noise, over 8 series: slope within 1 %, R2 > 0.999, and a blank-based LOD that is optimistic and varies widely", () => {
+    const cleanPts = CONCS.map((c) => {
+      const sim = simulateReversibleDiffusionCV({ ...SOLVER_DEFAULTS, cMM: c });
+      return buildCVCalibrationPoint(c, computeCVMetrics(sim, { scanRate_mVs: 100, n: 1, cMM: c, areaCm2: A }), "reversible");
     });
-    const summary = summarizeCalibration(pts, "mean");
-    expect(summary.fit).not.toBeNull();
-    expect(summary.fit!.r2).toBeGreaterThan(0.999);
-    expect(summary.fit!.slope).toBeGreaterThan(0);
-    expect(summary.sigmaSource).toBe("blank-replicates");
-    expect(summary.lod_mM).not.toBeNull();
-    expect(summary.loq_mM).not.toBeNull();
-    expect(summary.lod_mM!).toBeGreaterThan(0);
-    expect(summary.lod_mM!).toBeLessThan(0.2); // sub-200 uM, consistent with mM-scale probe
-    expect(summary.quality).toBe("green");
+    const cleanSlope = summarizeCalibration(cleanPts, "mean").fit!.slope;
+    const lods: number[] = [];
+    const blanks: number[] = [];
+    for (let k = 0; k < 8; k++) {
+      const pts = CONCS.map((c, i) => {
+        const clean = simulateReversibleDiffusionCV({ ...SOLVER_DEFAULTS, cMM: c });
+        const noisy = withNoise(clean, 0.5, 5000 + 100 * k + i);
+        return buildCVCalibrationPoint(c, computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM: c, areaCm2: A }), "reversible");
+      });
+      const summary = summarizeCalibration(pts, "mean");
+      expect(summary.fit!.r2).toBeGreaterThan(0.999);
+      expect(Math.abs(summary.fit!.slope / cleanSlope - 1)).toBeLessThan(0.01);
+      expect(summary.sigmaSource).toBe("blank-replicates");
+      expect(summary.lod_mM!).toBeGreaterThan(0);
+      lods.push(summary.lod_mM!);
+      pts.filter((p) => p.concentration_mM === 0).forEach((p) => blanks.push(p.responseMean_uA!));
+    }
+    // The blanks read ~0.3-1.6 uA, not zero (largest excursion of a trace with nothing in it) ...
+    expect(Math.min(...blanks)).toBeGreaterThan(0.25);
+    expect(Math.max(...blanks)).toBeLessThan(1.7);
+    // ... and they are nearly equal, so the LOD is optimistic: the median is far below the
+    // 3*sigma/slope = 0.055 mM that the injected noise (SD 0.29 uA) would give,
+    const noiseBased = (3 * (0.5 / Math.sqrt(3))) / cleanSlope;
+    const sorted = [...lods].sort((a, b) => a - b);
+    const median = (sorted[3] + sorted[4]) / 2;
+    expect(median).toBeLessThan(0.5 * noiseBased);
+    // and it varies by more than an order of magnitude between series, since it rests on three blanks.
+    expect(sorted[7] / sorted[0]).toBeGreaterThan(10);
   });
 });

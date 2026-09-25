@@ -71,23 +71,40 @@ describe("SWV calibration recovers a straight line down to the nanomolar range",
     expect(ratio).toBeLessThan(0.80);
   });
 
-  it("with +-0.05 nA of noise: slope within 0.5%, R2 > 0.99999, finite sub-nM LOD/LOQ", () => {
+  it("with +-0.05 nA of noise, over 8 series: slope within 0.5 %, R2 > 0.99999, blanks of random sign and a conservative LOD of a few nM", () => {
     const clean = fitLinearSWV(series("reversible", 0))!;
-    const pts = series("reversible", 0.00005);
-    const fit = fitLinearSWV(pts)!;
-    expect(Math.abs(fit.slope / clean.slope - 1)).toBeLessThan(0.005);
-    expect(fit.r2).toBeGreaterThan(0.99999);
-    const lod = computeLODSWV(pts)!;
-    expect(lod.sigmaSource).toBe("replicates");
-    expect(lod.value).toBeGreaterThan(0.05);
-    expect(lod.value).toBeLessThan(0.5);
-    expect(lod.loq).toBeGreaterThan(lod.value);
-    // The blanks read at about the noise amplitude, not zero: the "peak" of a
-    // trace with nothing in it is its largest excursion.
-    const blanks = pts.filter((p) => p.concentration === 0).map((p) => p.signal * 1000);
-    for (const b of blanks) {
-      expect(b).toBeGreaterThan(0.03);
-      expect(b).toBeLessThan(0.07);
+    const seriesK = (k: number): CalibrationPoint[] => CONCS_NM.map((c, i) => {
+      const params = { ...P, concentration_nM: c } as SWVParameters;
+      const data = withNoise(simulateReversibleDiffusionSWV(params), 0.00005, 9000 + 100 * k + i);
+      const m = analyzeSWV(data, "auto").metrics;
+      return { concentration: c, signal: m.peakCurrentCorrected_uA ?? 0, raw: m.peakCurrentRaw_uA ?? 0, timestamp: i };
+    });
+    const lods: number[] = [];
+    let mixedSigns = 0;
+    for (let k = 0; k < 8; k++) {
+      const pts = seriesK(k);
+      const fit = fitLinearSWV(pts)!;
+      expect(Math.abs(fit.slope / clean.slope - 1)).toBeLessThan(0.005);
+      expect(fit.r2).toBeGreaterThan(0.99999);
+      const lod = computeLODSWV(pts)!;
+      expect(lod.sigmaSource).toBe("replicates");
+      expect(lod.loq).toBeGreaterThan(lod.value);
+      lods.push(lod.value);
+      // The "peak" of a blank is the largest excursion of pure noise, so it reads at about the
+      // noise amplitude (0.05-0.11 nA) and its sign, taken from the larger of max and min, is random.
+      const blanks = pts.filter((p) => p.concentration === 0).map((p) => p.signal * 1000);
+      for (const b of blanks) {
+        expect(Math.abs(b)).toBeGreaterThan(0.04);
+        expect(Math.abs(b)).toBeLessThan(0.12);
+      }
+      if (blanks.some((b) => b < 0) && blanks.some((b) => b > 0)) mixedSigns++;
     }
+    expect(mixedSigns).toBeGreaterThanOrEqual(6);
+    // The blank scatter is larger than the noise itself (SD 0.029 nA), so the LOD is about twice the
+    // 3*sigma/slope = 2.1 nM the noise alone would give: conservative, not optimistic.
+    const noiseBased = (3 * (0.05 / Math.sqrt(3))) / (clean.slope * 1000);
+    const meanLod = lods.reduce((a, b) => a + b, 0) / lods.length;
+    expect(meanLod).toBeGreaterThan(1.5 * noiseBased);
+    expect(meanLod).toBeLessThan(3 * noiseBased);
   });
 });
