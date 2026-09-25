@@ -27,7 +27,7 @@ export type SWVDirection = "anodic" | "cathodic";
 export type SWVBaselineMethod =
   | "none"
   | "linear_edges"
-  | "polynomial"
+  | "quadratic"
   | "auto";
 
 export type SWVSmoothingMethod =

@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { analyzeSWV } from "@/utils/swvMetrics";
+import { analyzeSWV, normalizeSWVBaselineMethod } from "@/utils/swvMetrics";
 import { simulateReversibleDiffusionSWV } from "@/utils/swvDiffusionSolver";
 import type { SWVParameters } from "@/types/swv";
 
 /**
  * The SWV solvers contain neither charging current nor drift, so baseline
- * correction is only exercised when a known drift is added by hand. Thesis Table 12.
+ * correction is only exercised when a known drift is added by hand. Thesis Table 13.
  */
 const P = {
   startE: -0.2, endE: 0.6, step_mV: 2, amplitude_mV: 25, frequency_Hz: 25,
@@ -21,7 +21,7 @@ const drifts: Record<string, (E: number) => number> = {
   both: (E) => Ip * (0.10 + 0.20 * u(E)) + Ip * 0.40 * (1 - u(E)) ** 2,
 };
 
-function errPct(drift: (E: number) => number, method: "none" | "linear_edges" | "polynomial" | "auto") {
+function errPct(drift: (E: number) => number, method: "none" | "linear_edges" | "quadratic" | "auto") {
   const drifted = clean.map((p) => ({ ...p, INet: p.INet + drift(p.E) }));
   const m = analyzeSWV(drifted, method).metrics;
   return { err: (100 * (Math.abs(m.peakCurrentCorrected_uA!) - Ip)) / Ip, used: m.baselineMethodUsed };
@@ -42,10 +42,21 @@ describe("SWV baseline correction against a known added drift", () => {
 
   it("the quadratic baseline, and the automatic choice, recover the peak within 0.2 % for all three", () => {
     for (const d of Object.values(drifts)) {
-      expect(Math.abs(errPct(d, "polynomial").err)).toBeLessThan(0.2);
+      expect(Math.abs(errPct(d, "quadratic").err)).toBeLessThan(0.2);
       const auto = errPct(d, "auto");
       expect(Math.abs(auto.err)).toBeLessThan(0.2);
-      expect(auto.used).toBe("polynomial");
+      expect(auto.used).toBe("quadratic");
     }
+  });
+});
+
+describe("SWV baseline method ids", () => {
+  it("still accepts the old \"polynomial\" id as the quadratic baseline", () => {
+    expect(normalizeSWVBaselineMethod("polynomial")).toBe("quadratic");
+    const drifted = clean.map((p) => ({ ...p, INet: p.INet + drifts.curved(p.E) }));
+    const legacy = analyzeSWV(drifted, "polynomial" as never).metrics;
+    const current = analyzeSWV(drifted, "quadratic").metrics;
+    expect(legacy.baselineMethodUsed).toBe("quadratic");
+    expect(legacy.peakCurrentCorrected_uA).toBe(current.peakCurrentCorrected_uA);
   });
 });

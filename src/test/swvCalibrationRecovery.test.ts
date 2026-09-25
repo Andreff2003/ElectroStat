@@ -12,7 +12,7 @@ import type { SWVDataPoint, SWVParameters } from "@/types/swv";
  * peak detection -> the calibration panel's linear fit), in the nanomolar range
  * the panel works in. Like CV, and unlike EIS/BioFET, the response is a straight
  * line because the analyte diffuses freely and nothing saturates. Thesis Figure 15
- * and Table 13.
+ * and Table 14.
  */
 function rng(seed: number) {
   let a = seed >>> 0;

@@ -174,11 +174,17 @@ function guessPeakBand(iNet: number[]): { lo: number; hi: number } {
   };
 }
 
+/** Sessions saved before the rename stored the quadratic baseline as "polynomial". */
+export function normalizeSWVBaselineMethod(m: SWVBaselineMethod | "polynomial"): SWVBaselineMethod {
+  return m === "polynomial" ? "quadratic" : m;
+}
+
 export function correctBaseline(
   E: number[],
   iNet: number[],
-  method: SWVBaselineMethod,
+  methodIn: SWVBaselineMethod,
 ): BaselineResult {
+  const method = normalizeSWVBaselineMethod(methodIn);
   const n = iNet.length;
   const warnings: string[] = [];
   if (method === "none" || n < 4) {
@@ -251,13 +257,13 @@ export function correctBaseline(
     );
     // Prefer the polynomial only when we have enough edge points to fit it
     // meaningfully AND it substantially outperforms a straight line.
-    if (xEdge.length >= 6 && rmsPoly < rmsLin * 0.6) return "polynomial";
+    if (xEdge.length >= 6 && rmsPoly < rmsLin * 0.6) return "quadratic";
     return "linear_edges";
   };
 
   let effective: SWVBaselineMethod = method;
   if (method === "auto") effective = chooseAuto();
-  if (effective === "polynomial" && xEdge.length < 6) {
+  if (effective === "quadratic" && xEdge.length < 6) {
     warnings.push("Not enough edge points for quadratic baseline — falling back to linear.");
     effective = "linear_edges";
   }
@@ -273,7 +279,7 @@ export function correctBaseline(
     };
   }
 
-  // polynomial
+  // quadratic
   const [c2, c1, c0] = polyFit2(xEdge, yEdge);
   // Warn only when the quadratic term contributes a substantial fraction of
   // the observed signal amplitude (|c2|·span² comparable to |peak|).
@@ -287,7 +293,7 @@ export function correctBaseline(
     warnings.push("Quadratic baseline curvature is large — verify with raw plot.");
   }
   return {
-    methodUsed: "polynomial",
+    methodUsed: "quadratic",
     baseline: E.map((x) => (Number.isFinite(x) ? c2 * x * x + c1 * x + c0 : NaN)),
     slope_uA_V: null,
     intercept_uA: c0,
@@ -497,8 +503,9 @@ export function detectSWVPeak(
  */
 export function analyzeSWV(
   data: SWVDataPoint[],
-  method: SWVBaselineMethod,
+  methodIn: SWVBaselineMethod,
 ): { corrected: SWVDataPoint[]; metrics: SWVMetrics } {
+  const method = normalizeSWVBaselineMethod(methodIn);
   if (data.length === 0) {
     return {
       corrected: [],
