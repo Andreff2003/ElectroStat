@@ -72,4 +72,16 @@ describe("BioFET subthreshold slope: what the panel reads against ln(10) n kT/q"
     const levels = Array.from({ length: 10 }, (_, s) => panel({ n: 4 }, 50 + s).ssLevel);
     expect(levels.filter((l) => l === "green").length).toBeGreaterThanOrEqual(7);
   });
+
+  it("over 30 sweeps the grades are stable except for the wide transition, whose slope sits around the 400 mV/dec limit", () => {
+    const grades = (o: { n?: number; leak?: number }) =>
+      Array.from({ length: 30 }, (_, s) => panel(o, 100 + s));
+    expect(grades({}).every((q) => q.level === "green")).toBe(true);
+    expect(grades({ leak: 2 }).every((q) => q.level === "red")).toBe(true);
+    expect(grades({ leak: 8 }).every((q) => q.level === "red")).toBe(true);
+    const wide = grades({ n: 8 }).map((q) => q.ssLevel);
+    expect(wide.filter((l) => l === "green").length).toBe(0);
+    expect(wide.filter((l) => l === "yellow").length).toBeGreaterThan(10);
+    expect(wide.filter((l) => l === "red").length).toBeGreaterThan(5);
+  });
 });
