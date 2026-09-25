@@ -258,7 +258,7 @@ export function correctBaseline(
   let effective: SWVBaselineMethod = method;
   if (method === "auto") effective = chooseAuto();
   if (effective === "polynomial" && xEdge.length < 6) {
-    warnings.push("Not enough edge points for polynomial baseline — falling back to linear.");
+    warnings.push("Not enough edge points for quadratic baseline — falling back to linear.");
     effective = "linear_edges";
   }
 
@@ -284,7 +284,7 @@ export function correctBaseline(
   const finiteAmps = iNet.filter((v) => Number.isFinite(v)).map((v) => Math.abs(v));
   const peakAmp = finiteAmps.length ? Math.max(...finiteAmps) : 1;
   if (Math.abs(c2) * spanE * spanE > 0.5 * peakAmp) {
-    warnings.push("Polynomial baseline curvature is large — verify with raw plot.");
+    warnings.push("Quadratic baseline curvature is large — verify with raw plot.");
   }
   return {
     methodUsed: "polynomial",

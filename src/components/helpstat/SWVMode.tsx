@@ -493,7 +493,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
                   <option value="auto">Baseline: Auto</option>
                   <option value="none">Baseline: None</option>
                   <option value="linear_edges">Baseline: Linear edges</option>
-                  <option value="polynomial">Baseline: Polynomial</option>
+                  <option value="polynomial">Baseline: Quadratic</option>
                 </select>
               </Hint>
               <Hint text="Toggle raw (measured) vs baseline-subtracted I_net">
