@@ -7,11 +7,11 @@ import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 /**
  * How far the CV signal-quality SNR thresholds (green >=10, yellow >=3, see
  * cvSignalQuality.ts) sit from where the reported peak current itself starts
- * to drift under noise. Unlike EIS (see eisNoiseRobustness.test.ts), the CV
- * peak is read as the maximum of a lightly (3-point) smoothed trace rather
- * than from a fitted peak shape, so it is more exposed to noise than the SNR
- * estimate, which comes from the baseline-fit residual. See scratchpad
- * cv_noise_robustness.png / Figure 14 in the thesis for the full sweep.
+ * to drift under noise. Unlike EIS (see eisNoiseRobustness.test.ts), the peak
+ * current is more exposed to noise than the SNR suggests, and the cause is the
+ * baseline: a straight line fitted to a short stretch of each branch and
+ * extended to the peak. The SNR itself follows the scatter of the points
+ * correctly. Thesis Figure 14.
  */
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -35,14 +35,14 @@ const SOLVER_DEFAULTS = {
   scanRate_mVs: 100, nCycles: 1, n: 1, areaCm2: A, cMM,
 };
 
-function sweep(ampUA: number, runs: number) {
+function sweep(ampUA: number, runs: number, baseline: "auto" | "none" = "auto") {
   const basePts = simulateReversibleDiffusionCV(SOLVER_DEFAULTS);
-  const m0 = computeCVMetrics(basePts, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A })!;
+  const m0 = computeCVMetrics(basePts, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A, baselineMethodInput: baseline })!;
   const snrs: number[] = [];
   const errs: number[] = [];
   for (let s = 1; s <= runs; s++) {
     const noisy = withNoise(basePts, ampUA, 1000 * ampUA + s);
-    const m = computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A })!;
+    const m = computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A, baselineMethodInput: baseline })!;
     if (!m.hasCathodic) continue;
     snrs.push(m.SNR_cathodic);
     errs.push(100 * Math.abs(Math.abs(m.IpcCorrected) - Math.abs(m0.IpcCorrected)) / Math.abs(m0.IpcCorrected));
@@ -81,5 +81,12 @@ describe("CV noise robustness vs the SNR thresholds (green >=10, yellow >=3)", (
     const mid = sweep(6, 15);
     expect(mid.meanSNR).toBeGreaterThan(10);
     expect(mid.meanErr).toBeGreaterThan(8);
+  });
+
+  it("the error comes from the extrapolated baseline: with correction off, the same noise leaves the peak within ~4% at +-4 uA", () => {
+    const withBaseline = sweep(4, 15, "auto");
+    const without = sweep(4, 15, "none");
+    expect(withBaseline.meanErr).toBeGreaterThan(8);
+    expect(without.meanErr).toBeLessThan(4);
   });
 });
