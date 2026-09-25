@@ -254,7 +254,7 @@ function median(values: number[]): number {
 }
 
 /** Compute BioFET quality metrics from analyte + baseline curves. */
-function computeFETMetrics(analyte: FETTransferPoint[], baseline: FETTransferPoint[]) {
+export function computeFETMetrics(analyte: FETTransferPoint[], baseline: FETTransferPoint[]) {
   if (analyte.length < 10) {
     return {
       level: "idle" as Level,
