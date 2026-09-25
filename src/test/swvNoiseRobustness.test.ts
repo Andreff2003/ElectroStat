@@ -69,4 +69,20 @@ describe("SWV noise robustness vs the SNR thresholds", () => {
     expect(r.noPeak).toBe(15);
     expect(r.snr).toBeLessThan(3);
   });
+
+  it("the overestimate comes from reading the largest excursion, not from the baseline: it is the same with the correction off", () => {
+    const err = (method: "auto" | "none") => {
+      const ref = Math.abs(analyzeSWV(base, method).metrics.peakCurrentCorrected_uA!);
+      const e: number[] = [];
+      for (let s = 1; s <= 15; s++) {
+        const m = analyzeSWV(withNoise(base, 0.6 / 1000, Math.round(0.6 * 1000) * 100 + s), method).metrics;
+        e.push((100 * (Math.abs(m.peakCurrentCorrected_uA!) - ref)) / ref);
+      }
+      return e;
+    };
+    const a = err("auto"), n = err("none");
+    const mean = (v: number[]) => v.reduce((x, y) => x + y, 0) / v.length;
+    expect(a.every((x) => x > 0)).toBe(true); // always an overestimate
+    expect(Math.abs(mean(a) - mean(n))).toBeLessThan(1.5);
+  });
 });
