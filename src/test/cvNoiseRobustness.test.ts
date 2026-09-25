@@ -43,7 +43,6 @@ function sweep(ampUA: number, runs: number, baseline: "auto" | "none" = "auto") 
   for (let s = 1; s <= runs; s++) {
     const noisy = withNoise(basePts, ampUA, 1000 * ampUA + s);
     const m = computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A, baselineMethodInput: baseline })!;
-    if (!m.hasCathodic) continue;
     snrs.push(m.SNR_cathodic);
     errs.push(100 * Math.abs(Math.abs(m.IpcCorrected) - Math.abs(m0.IpcCorrected)) / Math.abs(m0.IpcCorrected));
   }
