@@ -41,6 +41,15 @@ describe("BioFET Vt extraction on the noise-free simulated transistor", () => {
     expect(noiseFreeShift(1e6)).toBeLessThan(396);
   });
 
+  it("the bias is a property of the smooth transition: it disappears when the transition is sharp", () => {
+    const p = fetPair(1e6, 1, { noise: false, n: 0.5 });
+    const m = computeFETTransferMetrics(p.baseline, p.analyte);
+    expect(Math.abs(m.vtBaseline! - 0.3)).toBeLessThan(0.0005);
+    expect(Math.abs(m.deltaVt_mV! - 400)).toBeLessThan(0.5);
+    // while at the default ideality factor the same curve reads 7 mV low
+    expect(noiseFreeShift(1e6)).toBeLessThan(394);
+  });
+
   it("the quality panel reads the subthreshold slope of the ideal curve within 1 % of ln(10) n kT/q", () => {
     const p = fetPair(25, 1, { noise: false });
     const theory = Math.log(10) * 2 * KT_Q_300K * 1000; // 119.0 mV/dec

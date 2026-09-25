@@ -32,6 +32,8 @@ export interface FETPairOptions {
   n?: number;        // ideality factor (default 2)
   leak?: number;     // constant leakage added to every point, uA
   noise?: boolean;   // false = noise-free
+  sign?: 1 | -1;     // -1 = binding lowers Vt instead of raising it
+  points?: number;   // gate points across -0.5..1.5 V (default 51, i.e. a 40 mV step)
 }
 
 export const trueShift_mV = (c: number) => (c > 0 ? (1000 * FET_DVT_MAX_V * c) / (c + FET_KD_NM) : 0);
@@ -39,15 +41,16 @@ export const trueShift_mV = (c: number) => (c > 0 ? (1000 * FET_DVT_MAX_V * c) /
 export function fetPair(c: number, seed: number, o: FETPairOptions = {}) {
   const r = rng(seed);
   const rel = o.rel ?? 0.02, abs = o.abs ?? 0.005, n = o.n ?? 2, leak = o.leak ?? 0;
+  const npts = o.points ?? 51, sign = o.sign ?? 1;
   const K = FET_ID_MAX_UA / (1.5 - FET_VT0_V) ** 2;
   const mk = (vt: number): FETTransferPoint[] =>
-    Array.from({ length: 51 }, (_, i) => {
-      const vg = -0.5 + (2 * i) / 50;
+    Array.from({ length: npts }, (_, i) => {
+      const vg = -0.5 + (2 * i) / (npts - 1);
       const id = fetDrainCurrent(vg, vt, { K, n, vt_thermal: KT_Q_300K }) + leak;
       const v = o.noise === false ? id : Math.max(id + gauss(r) * (abs + rel * Math.abs(id)), 1e-6);
       return { vg: Math.round(vg * 100) / 100, id: v };
     });
-  return { baseline: mk(FET_VT0_V), analyte: mk(FET_VT0_V + trueShift_mV(c) / 1000) };
+  return { baseline: mk(FET_VT0_V), analyte: mk(FET_VT0_V + (sign * trueShift_mV(c)) / 1000) };
 }
 
 export const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;

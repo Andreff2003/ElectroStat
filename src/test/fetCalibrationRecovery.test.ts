@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeFETTransferMetrics } from "@/utils/fetMetrics";
+import { computeFETTransferMetrics, inferFETResponseSign } from "@/utils/fetMetrics";
 import { fitLangmuirNLLS, computeLOD } from "@/components/CalibrationPanel";
 import { fetPair, mean } from "./fetSimHelper";
 
@@ -12,10 +12,11 @@ import { fetPair, mean } from "./fetSimHelper";
  */
 const CONCS = [0, 0, 0, 6.25, 12.5, 25, 50, 100, 200];
 
-function series(noise: boolean, seed0: number) {
+function series(noise: boolean, seed0: number, sign: 1 | -1 = 1) {
   const pts = CONCS.map((c, i) => {
-    const p = fetPair(c, seed0 + i, { noise });
-    const m = computeFETTransferMetrics(p.baseline, p.analyte, { responseMode: "signed" });
+    const p = fetPair(c, seed0 + i, { noise, sign });
+    const m = computeFETTransferMetrics(p.baseline, p.analyte,
+      sign === 1 ? { responseMode: "signed" } : { responseMode: "auto", responseSign: inferFETResponseSign([-10, -60, -120]) });
     return { concentration: c, signal: m.calibrationSignal_mV_used!, raw: m.vtAnalyte!, timestamp: i };
   });
   const fit = fitLangmuirNLLS(pts)!;
@@ -49,5 +50,21 @@ describe("BioFET calibration recovers the simulated Langmuir isotherm", () => {
     expect(lod).toBeGreaterThan(0.5);
     expect(lod).toBeLessThan(2);
     expect(runs.every((r) => r.lod!.loq > r.lod!.value)).toBe(true);
+  });
+
+  it("binding that lowers Vt is handled by the automatic response mode: the sign is kept and the isotherm is recovered as well as for a rise", () => {
+    expect(inferFETResponseSign([-10, -60, -120])).toBe(-1);
+    // noise-free: the shift is close to the true -355.6 mV (the bias is smaller because the lowered Vt sits far from the end of the sweep)
+    const p = fetPair(200, 1, { noise: false, sign: -1 });
+    const m = computeFETTransferMetrics(p.baseline, p.analyte);
+    expect(m.deltaVt_mV!).toBeLessThan(0);
+    expect(Math.abs(m.deltaVt_mV! / -355.56 - 1)).toBeLessThan(0.01);
+    // with noise: 8 series
+    const runs = Array.from({ length: 8 }, (_, k) => series(true, 1000 + 100 * k, -1));
+    expect(runs.every((r) => r.pts.filter((q) => q.concentration > 0).every((q) => q.signal > 0))).toBe(true);
+    expect(mean(runs.map((r) => r.fit.kd))).toBeGreaterThan(18);
+    expect(mean(runs.map((r) => r.fit.kd))).toBeLessThan(30);
+    expect(mean(runs.map((r) => r.fit.sMax))).toBeGreaterThan(365);
+    expect(mean(runs.map((r) => r.fit.sMax))).toBeLessThan(410);
   });
 });

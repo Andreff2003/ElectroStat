@@ -57,4 +57,19 @@ describe("BioFET subthreshold slope: what the panel reads against ln(10) n kT/q"
     // and around n = 2 it is within about 15 % of theory
     expect(Math.abs(noisy(2) / theorySS(2) - 1)).toBeLessThan(0.2);
   });
+
+  it("the noise floor is the cause: without the 0.005 uA floor the panel reads n = 2 and 4 within 5 % of theory", () => {
+    for (const n of [2, 4]) {
+      const v = Array.from({ length: 10 }, (_, s) => {
+        const p = fetPair(25, 50 + s, { n, abs: 0 });
+        return computeFETMetrics(p.analyte, p.baseline).subthresholdSlope;
+      });
+      expect(Math.abs(mean(v) / theorySS(n) - 1)).toBeLessThan(0.05);
+    }
+  });
+
+  it("so a device with n = 4 (theory 238 mV/dec, yellow) is graded green on slope in most sweeps", () => {
+    const levels = Array.from({ length: 10 }, (_, s) => panel({ n: 4 }, 50 + s).ssLevel);
+    expect(levels.filter((l) => l === "green").length).toBeGreaterThanOrEqual(7);
+  });
 });
