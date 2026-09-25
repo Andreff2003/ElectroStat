@@ -56,3 +56,39 @@ describe("CV scan-step resolution criterion on the default trace", () => {
     expect(at(20).m.deltaEp).toBeGreaterThan(76);
   });
 });
+
+describe("CV baseline correction against the same three backgrounds used for SWV", () => {
+  const ip = 80.57;
+  const u = (E: number) => (E + 0.2) / 0.8;
+  const shapes: Record<string, (E: number) => number> = {
+    line: (E) => ip * (0.10 + 0.20 * u(E)),
+    curved: (E) => ip * 0.40 * (1 - u(E)) ** 2,
+    both: (E) => ip * (0.10 + 0.20 * u(E)) + ip * 0.40 * (1 - u(E)) ** 2,
+  };
+  const run = (shape: string, m: "none" | "linear-first-15" | "linear-edges" | "auto") => {
+    const dr = clean.map((p) => ({ ...p, I: p.I + shapes[shape](p.E) }));
+    const r = computeCVMetrics(dr, { ...input, baselineMethodInput: m })!;
+    return { e: (100 * (Math.abs(r.IpcCorrected) - ip)) / ip, cls: r.reversibility };
+  };
+
+  it("a straight background is removed by the first-15% and automatic lines, not by the edges line", () => {
+    expect(run("line", "none").e).toBeLessThan(-18);
+    expect(Math.abs(run("line", "linear-first-15").e)).toBeLessThan(0.5);
+    expect(Math.abs(run("line", "auto").e)).toBeLessThan(0.5);
+    expect(run("line", "linear-edges").e).toBeLessThan(-16);
+    expect(run("line", "linear-edges").e).toBeGreaterThan(-18);
+  });
+
+  it("no CV method removes a curved background: the cathodic peak stays 7-11% low and the verdict moves off reversible", () => {
+    for (const shape of ["curved", "both"]) {
+      for (const m of ["linear-first-15", "linear-edges", "auto"] as const) {
+        const r = run(shape, m);
+        expect(r.e).toBeLessThan(-7);
+        expect(r.e).toBeGreaterThan(-10);
+        expect(r.cls).not.toBe("reversible");
+      }
+    }
+    expect(run("curved", "none").e).toBeLessThan(-9);
+    expect(run("both", "none").e).toBeLessThan(-28);
+  });
+});
