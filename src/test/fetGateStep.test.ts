@@ -34,7 +34,7 @@ describe("BioFET gate-sweep step", () => {
     for (const x of [s10, s40, s80]) expect(Math.abs(x.mean - 200)).toBeLessThan(10);
   });
 
-  it("at 100 mV (3 points in the window) the scatter jumps to > 60 mV and some sweeps fall back, while the panel stays green", () => {
+  it("at 100 mV (3 to 5 points in the window) the scatter jumps to > 60 mV and some sweeps fall back, while the panel stays green", () => {
     const s = atPoints(21);
     expect(s.sd).toBeGreaterThan(60);
     expect(s.fallbacks).toBeGreaterThan(0);
