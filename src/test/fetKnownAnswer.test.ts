@@ -86,6 +86,11 @@ describe("BioFET Vt extraction with the simulator's own noise (30 sweeps per con
     expect(mean(noise)).toBeGreaterThan(1.5);
     expect(mean(noise)).toBeLessThan(2.6);
     expect(r.every((x) => x.q.level === "green")).toBe(true);
+    // the noise exported with the measurement is the same on-state scatter, not the whole-curve std/mean (which read ~140 %)
+    const exported = r.map((x) => x.m.baselineStabilityNoisePct!);
+    expect(mean(exported)).toBeGreaterThan(1.5);
+    expect(mean(exported)).toBeLessThan(2.6);
+    expect(Math.abs(mean(exported) - mean(noise))).toBeLessThan(0.05);
   });
 
   it("25 nM and 200 nM: shifts within about 2 % of the true 200 and 356 mV", () => {

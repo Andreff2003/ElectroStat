@@ -15,6 +15,7 @@
  */
 import type { FETTransferPoint } from "@/hooks/useSimulatedData";
 import { computeFETVtDetailed as _vtDetailed } from "@/utils/fetVt";
+import { fetOnStateNoisePct } from "@/utils/fetNoise";
 
 export type FETResponseMode = "auto" | "signed" | "absolute";
 
@@ -169,14 +170,10 @@ export function computeFETTransferMetrics(
   const ratio = ion != null && ioff != null && ioff > 0 ? ion / ioff : null;
   const ss = computeSS(analyte);
 
-  // Baseline stability: relative noise on the baseline Id (std/mean *100).
-  let baselineStability: number | null = null;
-  const bIds = baseline.map((p) => p.id).filter((v) => Number.isFinite(v));
-  if (bIds.length >= 5) {
-    const m = bIds.reduce((a, b) => a + b, 0) / bIds.length;
-    const s = Math.sqrt(bIds.reduce((a, v) => a + (v - m) ** 2, 0) / bIds.length);
-    baselineStability = m > 1e-12 ? (s / m) * 100 : null;
-  }
+  // Baseline noise: scatter of the baseline curve around its own smooth on-state
+  // trend (see fetOnStateNoisePct). The former whole-curve std/mean read ~140 %
+  // on any sweep that spans off to on, because it measured the shape of the curve.
+  const baselineStability = fetOnStateNoisePct(baseline);
 
   const warnings: string[] = [];
   if (vb.warning) warnings.push(`baseline: ${vb.warning}`);
