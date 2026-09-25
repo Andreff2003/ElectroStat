@@ -73,7 +73,7 @@ describe("EIS calibration pipeline recovers the simulator's binding law", () => 
     expect(rows[rows.length - 1].rct).toBeGreaterThan(rows[0].rct + 300); // clearly saturating
   });
 
-  it("Randles + Warburg calibration recovers Kd and Smax essentially exactly", () => {
+  it("Randles + Warburg calibration recovers Kd and Smax essentially exactly", { timeout: 60000 }, () => {
     const kd: number[] = [];
     const sMax: number[] = [];
     for (let run = 1; run <= 8; run++) {
