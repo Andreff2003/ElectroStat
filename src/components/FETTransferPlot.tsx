@@ -93,7 +93,7 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={plotData}
-          margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 16, right: 24, bottom: 48, left: 56 }}
+          margin={compact ? { top: 8, right: 8, bottom: 8, left: 8 } : { top: 8, right: 24, bottom: 30, left: 56 }}
           onMouseDown={compact ? undefined : handleMouseDown}
           onMouseMove={compact ? undefined : handleMouseMove}
           onMouseUp={compact ? undefined : handleMouseUp}
@@ -104,7 +104,7 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
             type="number"
             domain={zoomDomain ? zoomDomain.x : ["auto", "auto"]}
             allowDataOverflow
-            label={compact ? undefined : { value: "Gate Voltage Vg (V)", position: "bottom", offset: 20, fill: "hsl(215 15% 50%)", fontSize: 12 }}
+            label={compact ? undefined : { value: "Gate Voltage Vg (V)", position: "bottom", offset: 6, fill: "hsl(215 15% 50%)", fontSize: 12 }}
             tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 11 }}
             stroke="hsl(220 15% 20%)"
           />
@@ -142,7 +142,7 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
             }}
             formatter={(value: number) => [`${value.toFixed(2)} µA`]}
           />
-          {!compact && <Legend wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12 }} />}
+          {!compact && <Legend verticalAlign="top" align="right" wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12, paddingBottom: 6 }} />}
           {overlays.flatMap((ov) => [
             <Line
               key={`ovb_${ov.id}`}

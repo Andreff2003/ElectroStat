@@ -91,7 +91,7 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={data}
-          margin={compact ? { top: 8, right: 8, bottom: 8, left: 16 } : { top: 10, right: 20, bottom: 40, left: 20 }}
+          margin={compact ? { top: 8, right: 8, bottom: 8, left: 16 } : { top: 28, right: 20, bottom: 26, left: 20 }}
           onMouseDown={compact ? undefined : handleMouseDown}
           onMouseMove={compact ? undefined : handleMouseMove}
           onMouseUp={compact ? undefined : handleMouseUp}
@@ -102,7 +102,7 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
             type="number"
             domain={zoomDomain ? zoomDomain.x : ["auto", "auto"]}
             allowDataOverflow
-            label={compact ? undefined : { value: "Time (s)", position: "bottom", offset: 20, fill: "hsl(215 15% 50%)", fontSize: 12 }}
+            label={compact ? undefined : { value: "Time (s)", position: "bottom", offset: 6, fill: "hsl(215 15% 50%)", fontSize: 12 }}
             tick={{ fill: "hsl(215 15% 50%)", fontSize: compact ? 9 : 11 }}
             stroke="hsl(220 15% 20%)"
           />
@@ -133,7 +133,7 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
               label={compact ? undefined : { value: m.label, fill: "hsl(0 65% 60%)", fontSize: 11, position: "top" }}
             />
           ))}
-          {!compact && <Legend wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12 }} />}
+          {!compact && overlays.length > 0 && <Legend wrapperStyle={{ color: "hsl(215 15% 50%)", fontSize: 12 }} />}
           {overlays.map((ov, idx) => {
             const key = ov.id ?? `ov-${idx}`;
             return (
