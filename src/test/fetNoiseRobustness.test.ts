@@ -56,4 +56,27 @@ describe("BioFET Baseline Noise vs the accuracy of the reported shift", () => {
     expect(level(20).fallbacks).toBeGreaterThan(level(15).fallbacks);
     expect(level(30).fallbacks).toBe(15);
   });
+
+  it("the error peaks where the method is chosen curve by curve: sweeps whose two thresholds were read by different methods are off by hundreds of mV", () => {
+    const SQ = "sqrt_extrapolation";
+    const classify = (pct: number) => {
+      const both: number[] = [], mixed: number[] = [], fb: number[] = [];
+      for (let s = 1; s <= 15; s++) {
+        const p = fetPair(25, Math.round(pct * 100) * 100 + s, { rel: pct / 100 });
+        const m = computeFETTransferMetrics(p.baseline, p.analyte);
+        const e = Math.abs(m.deltaVt_mV! - trueShift_mV(25));
+        const a = m.vtAnalyteMethod === SQ, b = m.vtBaselineMethod === SQ;
+        (a && b ? both : a !== b ? mixed : fb).push(e);
+      }
+      return { both, mixed, fb };
+    };
+    const at20 = classify(20), at30 = classify(30);
+    // at 20 % most sweeps are mixed and their error is several hundred mV ...
+    expect(at20.mixed.length).toBeGreaterThanOrEqual(7);
+    expect(mean(at20.mixed)).toBeGreaterThan(250);
+    // ... at 30 % nearly all fall back on both curves, and the error drops to that of the fallback alone.
+    expect(at30.fb.length).toBeGreaterThanOrEqual(12);
+    expect(mean(at30.fb)).toBeLessThan(150);
+    expect(mean(at30.fb)).toBeLessThan(mean(at20.mixed));
+  });
 });
