@@ -15,7 +15,7 @@
  */
 import type { FETTransferPoint } from "@/hooks/useSimulatedData";
 import { computeFETVtDetailed as _vtDetailed } from "@/utils/fetVt";
-import { fetOnStateNoisePct } from "@/utils/fetNoise";
+import { computeFETQuality } from "@/utils/fetQuality";
 
 export type FETResponseMode = "auto" | "signed" | "absolute";
 
@@ -105,41 +105,6 @@ export function applyFETResponseMode(
   return { signedSignal_mV: signal_mV, calibrationSignal_mV_used: sign * signal_mV, responseSign: sign };
 }
 
-/** Ion (95th pct), Ioff (5th pct) on analyte curve. */
-function computeIonIoff(curve: FETTransferPoint[]): { ion: number | null; ioff: number | null } {
-  const ids = curve.map((p) => p.id).filter((v) => Number.isFinite(v));
-  if (ids.length < 5) return { ion: null, ioff: null };
-  const sorted = [...ids].sort((a, b) => a - b);
-  const pct = (p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
-  return { ion: pct(0.95), ioff: Math.max(pct(0.05), 1e-12) };
-}
-
-/** Subthreshold slope (mV/dec) — linear fit of Vg vs log10(Id) on subthreshold region. */
-function computeSS(curve: FETTransferPoint[]): number | null {
-  const clean = curve.filter((p) => p.id > 0 && Number.isFinite(p.vg)).sort((a, b) => a.vg - b.vg);
-  if (clean.length < 5) return null;
-  const ids = clean.map((p) => p.id);
-  const sorted = [...ids].sort((a, b) => a - b);
-  const ioff = Math.max(sorted[Math.floor(0.05 * (sorted.length - 1))], 1e-12);
-  const ion = sorted[Math.floor(0.95 * (sorted.length - 1))];
-  if (!(ion > ioff)) return null;
-  const lo = ioff * 2;
-  const hi = ioff * 100;
-  const region = clean.filter((p) => p.id >= lo && p.id <= hi);
-  if (region.length < 3) return null;
-  const xs = region.map((p) => p.vg);
-  const ys = region.map((p) => Math.log10(p.id));
-  const n = xs.length;
-  const mx = xs.reduce((a, b) => a + b, 0) / n;
-  const my = ys.reduce((a, b) => a + b, 0) / n;
-  let sxy = 0, sxx = 0;
-  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; }
-  if (sxx < 1e-18) return null;
-  const slope = sxy / sxx; // dec / V
-  if (Math.abs(slope) < 1e-9) return null;
-  return Math.abs(1000 / slope); // mV/dec
-}
-
 export interface FETMetricsOptions {
   responseMode?: FETResponseMode;
   responseSign?: 1 | -1;
@@ -176,14 +141,14 @@ export function computeFETTransferMetrics(
     calibrationSignal_mV_used = applyFETResponseMode(deltaVt_mV, responseMode, responseSign).calibrationSignal_mV_used;
   }
 
-  const { ion, ioff } = computeIonIoff(analyte);
-  const ratio = ion != null && ioff != null && ioff > 0 ? ion / ioff : null;
-  const ss = computeSS(analyte);
-
-  // Baseline noise: scatter of the baseline curve around its own smooth on-state
-  // trend (see fetOnStateNoisePct). The former whole-curve std/mean read ~140 %
-  // on any sweep that spans off to on, because it measured the shape of the curve.
-  const baselineStability = fetOnStateNoisePct(baseline);
+  // Ion/Ioff, subthreshold slope, off-current and baseline noise are the panel's own estimators
+  // (utils/fetQuality.ts), so the numbers exported with a measurement are the ones the operator saw.
+  const quality = computeFETQuality(analyte, baseline);
+  const ion = quality.ready ? quality.ion : null;
+  const ioff = quality.ready ? quality.ioff : null;
+  const ratio = quality.ready ? quality.ionIoff : null;
+  const ss = quality.ready && quality.subthresholdSlope > 0 ? quality.subthresholdSlope : null;
+  const baselineStability = quality.ready && quality.stabilityLevel !== "idle" ? quality.baselineStability : null;
 
   const warnings: string[] = [];
   if (sameMethodForced) {

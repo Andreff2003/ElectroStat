@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { EISDataPoint, FETTransferPoint } from "@/hooks/useSimulatedData";
-import { fetOnStateNoisePct } from "@/utils/fetNoise";
+import { computeFETQuality } from "@/utils/fetQuality";
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
 import { computeCVSignalQuality, estimateCVStepMv } from "@/utils/cvSignalQuality";
@@ -245,111 +245,8 @@ function computeEISMetrics(
   };
 }
 
-/** Median helper. */
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : 0.5 * (s[mid - 1] + s[mid]);
-}
-
-/** Compute BioFET quality metrics from analyte + baseline curves. */
-export function computeFETMetrics(analyte: FETTransferPoint[], baseline: FETTransferPoint[]) {
-  if (analyte.length < 10) {
-    return {
-      level: "idle" as Level,
-      ready: false,
-      ionIoff: 0,
-      subthresholdSlope: 0,
-      ioff: 0,
-      baselineStability: 0,
-      ionLevel: "idle" as Level,
-      ssLevel: "idle" as Level,
-      ioffLevel: "idle" as Level,
-      stabilityLevel: "idle" as Level,
-      negativeCurrentWarning: false,
-    };
-  }
-
-  const sortedByVg = [...analyte].sort((a, b) => a.vg - b.vg);
-  const hasNegative = sortedByVg.some((p) => p.id < 0);
-  const EPS = 1e-3;
-
-  // 1. Robust Ion / Ioff — medians of the first/last 10% of Vg windows.
-  //    Avoids the historic min/max collapse on a single noisy point.
-  const winSize = Math.max(3, Math.floor(sortedByVg.length * 0.1));
-  const offRegion = sortedByVg.slice(0, winSize).map((p) => Math.max(Math.abs(p.id), EPS));
-  const onRegion = sortedByVg.slice(-winSize).map((p) => Math.max(Math.abs(p.id), EPS));
-  const ioff = median(offRegion);
-  const ion = median(onRegion);
-  const ionIoff = ion / Math.max(ioff, EPS);
-
-  // 2. Subthreshold Slope (mV/dec) — moving-window log10 fit in transition.
-  const transRegion = sortedByVg.filter((p) => {
-    const v = Math.abs(p.id);
-    return v > 1e-6 && v < 0.2 * ion;
-  });
-  let ss = 0;
-  let bestSlope = 0;
-  for (let windowSize = 4; windowSize <= 6; windowSize++) {
-    for (let start = 0; start + windowSize <= transRegion.length; start++) {
-      const window = transRegion.slice(start, start + windowSize);
-      const xs = window.map((p) => p.vg);
-      const ys = window.map((p) => Math.log10(Math.max(Math.abs(p.id), 1e-12)));
-      const n = xs.length;
-      const sumX = xs.reduce((a, b) => a + b, 0);
-      const sumY = ys.reduce((a, b) => a + b, 0);
-      const sumXY = xs.reduce((a, _, i) => a + xs[i] * ys[i], 0);
-      const sumX2 = xs.reduce((a, b) => a + b * b, 0);
-      const denom = n * sumX2 - sumX * sumX;
-      if (Math.abs(denom) <= 1e-12) continue;
-      const slope = (n * sumXY - sumX * sumY) / denom;
-      if (slope <= 0.1) continue;
-      const intercept = (sumY - slope * sumX) / n;
-      const meanY = sumY / n;
-      const total = ys.reduce((a, y) => a + (y - meanY) ** 2, 0);
-      const residual = ys.reduce((a, y, i) => a + (y - (slope * xs[i] + intercept)) ** 2, 0);
-      const rSquared = total > 1e-12 ? 1 - residual / total : 0;
-      if (rSquared > 0.8 && slope > bestSlope) bestSlope = slope;
-    }
-  }
-  if (bestSlope > 0) ss = 1000 / bestSlope;
-
-  // 4. Baseline noise — scatter of the baseline curve around its own smooth
-  //    on-state trend (see fetOnStateNoisePct). Both the old deep-off std/mean
-  //    (dominated by the exponential slope and by a fixed 0.05 µA floor) and
-  //    this one grade <5 % green, <15 % yellow.
-  let stabilityNoisePct = 0;
-  let stabilityLevel: Level = "idle";
-  const noisePct = baseline.length >= 5 ? fetOnStateNoisePct(baseline) : null;
-  if (noisePct != null) {
-    stabilityNoisePct = noisePct;
-    stabilityLevel = noisePct < 5 ? "green" : noisePct < 15 ? "yellow" : "red";
-  }
-
-  const ionLevel: Level = ionIoff > 100 ? "green" : ionIoff > 20 ? "yellow" : "red";
-  const ssLevel: Level = ss > 0 && ss < 200 ? "green" : ss > 0 && ss < 400 ? "yellow" : "red";
-  const ioffLevel: Level = ioff < 1 ? "green" : ioff < 5 ? "yellow" : "red";
-
-  // Overall via the shared worst-of rollup (includes SS). Note: ΔVt is the
-  // biological result, not an electrode-quality metric — it deliberately
-  // stays out of this rollup and is only shown on its own MetricRow.
-  const level = worstOf([ionLevel, ssLevel, ioffLevel, stabilityLevel]);
-
-  return {
-    level,
-    ready: true,
-    ionIoff,
-    subthresholdSlope: ss,
-    ioff,
-    baselineStability: stabilityNoisePct,
-    ionLevel,
-    ssLevel,
-    ioffLevel,
-    stabilityLevel,
-    negativeCurrentWarning: hasNegative,
-  };
-}
+/** Compute BioFET quality metrics from analyte + baseline curves (see utils/fetQuality.ts). */
+export const computeFETMetrics = computeFETQuality;
 
 /** Compute SWV quality metrics from data + extracted peak metrics. */
 function computeSWVMetrics(
@@ -564,6 +461,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             />
             <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
 
+            <MetricRow label="Vt Window Points" title="Points of the strong-inversion window (20-80 % of Ion) the threshold voltage is fitted to. It depends on the gate-voltage step. 8 or more green, 4 to 7 yellow, fewer red (below 4 the square-root fit is refused and a less accurate constant-current method is used)." value={ready ? `${fetMetrics.windowPoints}` : pending} level={fetMetrics.windowLevel} />
             <MetricRow label="Baseline Noise" title="Scatter of the baseline curve around its smooth on-state trend (RMS of the residuals of a quadratic fit, as % of the mean current, on points above 30% of Ion). <5% green, <15% yellow, else red." value={ready && fetMetrics.stabilityLevel !== "idle" ? `${fetMetrics.baselineStability.toFixed(1)} %` : ready ? "—" : pending} level={fetMetrics.stabilityLevel} />
             {rangeInfo.anyFlagPresent && (
               <MetricRow

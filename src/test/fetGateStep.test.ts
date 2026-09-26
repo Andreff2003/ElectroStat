@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { computeFETTransferMetrics } from "@/utils/fetMetrics";
 import { computeFETMetrics } from "@/components/SignalQuality";
+import { computeFETQuality } from "@/utils/fetQuality";
 import { fetPair, mean, sd } from "./fetSimHelper";
 
 /**
  * Gate-sweep step (1-200 mV on the panel; the default 40 mV is 51 points across
  * -0.5 to 1.5 V). The step sets how many points fall in the 20-80 % window the
  * Vt line is fitted to, and with fewer than four the extraction falls back to
- * the constant-current method. The FET quality panel has no criterion for it.
+ * the constant-current method. The panel grades it through the number of points in that window.
  * 25 nM sweep (true shift 200 mV), 15 sweeps per step. Thesis, BioFET Results.
  */
 function atPoints(points: number, runs = 15) {
@@ -34,17 +35,29 @@ describe("BioFET gate-sweep step", () => {
     for (const x of [s10, s40, s80]) expect(Math.abs(x.mean - 200)).toBeLessThan(10);
   });
 
-  it("at 100 mV (3 to 5 points in the window) the scatter grows to ~37 mV and the sweeps with fewer than 4 points fall back, while the panel stays green", () => {
+  it("the panel grades the step through the points in the Vt window: green up to 40 mV, yellow at 80 mV", () => {
+    const win = (points: number) => Array.from({ length: 15 }, (_, s) => {
+      const p = fetPair(25, 700 + s, { points }); return computeFETQuality(p.analyte, p.baseline);
+    });
+    for (const pts of [201, 101, 51]) expect(win(pts).every((q) => q.windowLevel === "green" && q.level === "green")).toBe(true);
+    expect(win(51).every((q) => q.windowPoints >= 8)).toBe(true); // the default 40 mV puts ~10 points in the window
+    const at80 = win(26);
+    expect(at80.every((q) => q.windowPoints >= 4 && q.windowPoints < 8)).toBe(true);
+    expect(at80.every((q) => q.windowLevel === "yellow" && q.level === "yellow")).toBe(true);
+  });
+
+  it("at 100 mV (3 to 5 points in the window) the scatter grows to ~37 mV, the sweeps with fewer than 4 points fall back, and the panel warns (yellow, red where it falls back)", () => {
     const s = atPoints(21);
     expect(s.sd).toBeGreaterThan(30);
     expect(s.sd).toBeLessThan(50);
     expect(s.sd).toBeGreaterThan(atPoints(26).sd);
     expect(s.fallbacks).toBeGreaterThan(0);
     expect(s.fallbacks).toBeLessThan(15);
-    expect(s.levels.every((l) => l === "green")).toBe(true);
+    expect(s.levels.every((l) => l !== "green")).toBe(true);
+    expect(s.levels.filter((l) => l === "red").length).toBe(s.fallbacks);
   });
 
-  it("at 200 mV (2 points) every sweep falls back, also without noise, and the shift reads about a third low", () => {
+  it("at 200 mV (2 points) every sweep falls back, also without noise, the shift reads about a third low, and the panel is red every time", () => {
     const s = atPoints(11);
     expect(s.fallbacks).toBe(15);
     expect(s.mean).toBeGreaterThan(110);
@@ -53,7 +66,6 @@ describe("BioFET gate-sweep step", () => {
     const m = computeFETTransferMetrics(nf.baseline, nf.analyte);
     expect(m.vtAnalyteMethod).toBe("constant_current_fallback");
     expect(m.deltaVt_mV!).toBeLessThan(150);
-    // and the panel does not warn consistently
-    expect(new Set(s.levels).size).toBeGreaterThan(1);
+    expect(s.levels.every((l) => l === "red")).toBe(true);
   });
 });

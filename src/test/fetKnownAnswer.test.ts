@@ -86,11 +86,16 @@ describe("BioFET Vt extraction with the simulator's own noise (30 sweeps per con
     expect(mean(noise)).toBeGreaterThan(1.5);
     expect(mean(noise)).toBeLessThan(2.6);
     expect(r.every((x) => x.q.level === "green")).toBe(true);
-    // the noise exported with the measurement is the same on-state scatter, not the whole-curve std/mean (which read ~140 %)
+    // what is exported with the measurement is what the panel shows: same noise, Ion/Ioff and slope
+    // (the slope used to be undefined in 29 of 30 sweeps and Ion/Ioff read ~4e7 before they shared estimators)
     const exported = r.map((x) => x.m.baselineStabilityNoisePct!);
     expect(mean(exported)).toBeGreaterThan(1.5);
     expect(mean(exported)).toBeLessThan(2.6);
     expect(Math.abs(mean(exported) - mean(noise))).toBeLessThan(0.05);
+    expect(r.every((x) => x.m.subthresholdSlope_mV_dec != null && Math.abs(x.m.subthresholdSlope_mV_dec - x.q.subthresholdSlope) < 1e-9)).toBe(true);
+    expect(r.every((x) => Math.abs(x.m.ionIoffRatio! / x.q.ionIoff - 1) < 1e-9)).toBe(true);
+    expect(mean(r.map((x) => x.m.ionIoffRatio!))).toBeGreaterThan(1e4);
+    expect(mean(r.map((x) => x.m.ionIoffRatio!))).toBeLessThan(5e4);
   });
 
   it("25 nM and 200 nM: shifts within about 2 % of the true 200 and 356 mV", () => {
