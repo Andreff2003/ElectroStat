@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeFETTransferMetrics } from "@/utils/fetMetrics";
+import { computeFETVtDetailed } from "@/utils/fetVt";
 import { computeFETMetrics } from "@/components/SignalQuality";
 import { fetPair, trueShift_mV, mean } from "./fetSimHelper";
 
@@ -39,13 +40,13 @@ describe("BioFET Baseline Noise vs the accuracy of the reported shift", () => {
     expect(level(30).noise).toBeGreaterThan(15);
   });
 
-  it("the error in the shift grows with the noise: ~16 mV at the simulator default, ~28 mV at the green limit, above 100 mV at the yellow/red limit", () => {
+  it("the error in the shift grows with the noise: ~16 mV at the simulator default, ~28 mV at the green limit, ~70 mV at the yellow/red limit", () => {
     const e2 = level(2).err, e5 = level(5).err, e15 = level(15).err;
     expect(e2).toBeGreaterThan(8);
     expect(e2).toBeLessThan(25);
     expect(e5).toBeGreaterThan(15);
     expect(e5).toBeLessThan(45);
-    expect(e15).toBeGreaterThan(100);
+    expect(e15).toBeGreaterThan(55);
     expect(e2).toBeLessThan(e5);
     expect(e5).toBeLessThan(e15);
   });
@@ -57,26 +58,41 @@ describe("BioFET Baseline Noise vs the accuracy of the reported shift", () => {
     expect(level(30).fallbacks).toBe(15);
   });
 
-  it("the error peaks where the method is chosen curve by curve: sweeps whose two thresholds were read by different methods are off by hundreds of mV", () => {
-    const SQ = "sqrt_extrapolation";
-    const classify = (pct: number) => {
-      const both: number[] = [], mixed: number[] = [], fb: number[] = [];
+  it("both curves of a measurement are always read the same way, so the error levels off at the fallback's own bias instead of peaking", () => {
+    const perLevel = (pct: number) => {
+      const err: number[] = [], signed: number[] = []; let mixed = 0;
       for (let s = 1; s <= 15; s++) {
         const p = fetPair(25, Math.round(pct * 100) * 100 + s, { rel: pct / 100 });
         const m = computeFETTransferMetrics(p.baseline, p.analyte);
-        const e = Math.abs(m.deltaVt_mV! - trueShift_mV(25));
-        const a = m.vtAnalyteMethod === SQ, b = m.vtBaselineMethod === SQ;
-        (a && b ? both : a !== b ? mixed : fb).push(e);
+        if (m.vtAnalyteMethod !== m.vtBaselineMethod) mixed++;
+        err.push(Math.abs(m.deltaVt_mV! - trueShift_mV(25))); signed.push(m.deltaVt_mV! - trueShift_mV(25));
       }
-      return { both, mixed, fb };
+      return { mixed, err: mean(err), signed: mean(signed) };
     };
-    const at20 = classify(20), at30 = classify(30);
-    // at 20 % most sweeps are mixed and their error is several hundred mV ...
-    expect(at20.mixed.length).toBeGreaterThanOrEqual(7);
-    expect(mean(at20.mixed)).toBeGreaterThan(250);
-    // ... at 30 % nearly all fall back on both curves, and the error drops to that of the fallback alone.
-    expect(at30.fb.length).toBeGreaterThanOrEqual(12);
-    expect(mean(at30.fb)).toBeLessThan(150);
-    expect(mean(at30.fb)).toBeLessThan(mean(at20.mixed));
+    const lv = [10, 15, 20, 30, 50].map(perLevel);
+    expect(lv.every((x) => x.mixed === 0)).toBe(true);
+    // 15 % -> 50 %: bounded between ~65 and ~110 mV (the fallback reads a third low), no peak above 150 mV
+    for (const x of lv.slice(1)) { expect(x.err).toBeGreaterThan(55); expect(x.err).toBeLessThan(110); }
+    // once every sweep uses the fallback the shift reads low by about a third of 200 mV
+    expect(lv[3].signed).toBeLessThan(-55);
+    expect(lv[3].signed).toBeGreaterThan(-90);
+  });
+
+  it("the constant-current method is biased low but far less sensitive to noise than the square-root fit", () => {
+    const errOf = (pct: number, forced: "sqrt" | "fallback") => {
+      const e: number[] = [];
+      for (let s = 1; s <= 15; s++) {
+        const p = fetPair(25, Math.round(pct * 100) * 100 + s, { rel: pct / 100 });
+        const o = forced === "sqrt" ? { minR2: -1e9, minPoints: 2 } : { forceFallback: true };
+        e.push(Math.abs((computeFETVtDetailed(p.analyte, o).vt! - computeFETVtDetailed(p.baseline, o).vt!) * 1000 - trueShift_mV(25)));
+      }
+      return mean(e);
+    };
+    for (const pct of [10, 20, 30, 50]) {
+      expect(errOf(pct, "fallback")).toBeGreaterThan(50); // the bias: about a third of 200 mV
+      expect(errOf(pct, "fallback")).toBeLessThan(120);
+    }
+    // the sqrt fit, forced on every sweep, grows without bound with the noise
+    expect(errOf(50, "sqrt")).toBeGreaterThan(5 * errOf(50, "fallback"));
   });
 });

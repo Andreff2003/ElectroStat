@@ -153,8 +153,18 @@ export function computeFETTransferMetrics(
   const responseMode: FETResponseMode = opts.responseMode ?? "signed";
   const responseSign: 1 | -1 = opts.responseSign ?? 1;
 
-  const vb = computeFETVtDetailed(baseline);
-  const va = computeFETVtDetailed(analyte);
+  let vb = computeFETVtDetailed(baseline);
+  let va = computeFETVtDetailed(analyte);
+  // Read both curves the same way. If only one of them needed the constant-current
+  // fallback, re-read the other with it too: the shift between thresholds found by
+  // different methods is off by hundreds of mV (see fetVt.ts, forceFallback).
+  let sameMethodForced = false;
+  const isFb = (m: string) => m === "constant_current_fallback";
+  if (vb.method !== va.method && (isFb(vb.method) || isFb(va.method)) && vb.method !== "invalid" && va.method !== "invalid") {
+    if (isFb(va.method)) vb = _vtDetailed(baseline, { forceFallback: true });
+    else va = _vtDetailed(analyte, { forceFallback: true });
+    sameMethodForced = true;
+  }
 
   const vtBaseline = vb.vt;
   const vtAnalyte = va.vt;
@@ -176,6 +186,9 @@ export function computeFETTransferMetrics(
   const baselineStability = fetOnStateNoisePct(baseline);
 
   const warnings: string[] = [];
+  if (sameMethodForced) {
+    warnings.push("ΔVt uses the constant-current method on both curves (square-root extraction failed on one); it reads about 35 % low but consistently.");
+  }
   if (vb.warning) warnings.push(`baseline: ${vb.warning}`);
   if (va.warning) warnings.push(`analyte: ${va.warning}`);
 

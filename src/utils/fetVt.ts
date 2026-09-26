@@ -64,6 +64,14 @@ export interface VtOptions {
   minPoints?: number;
   /** R² threshold below which we declare the sqrt fit invalid (default 0.8). */
   minR2?: number;
+  /**
+   * Skip the sqrt fit and read Vt with the constant-current method. Used by
+   * computeFETTransferMetrics so that both curves of one measurement are read
+   * the same way: the two methods place the threshold in different places
+   * (the fallback sits 0.2-0.3 V above the sqrt value), so a shift taken
+   * between one curve of each kind is off by hundreds of mV.
+   */
+  forceFallback?: boolean;
 }
 
 export function computeFETVtDetailed(
@@ -105,7 +113,7 @@ export function computeFETVtDetailed(
   }
 
   // sqrt(Id) linear fit
-  if (region.length >= minPoints) {
+  if (!opts.forceFallback && region.length >= minPoints) {
     const xs = region.map((r) => r.vg);
     const ys = region.map((r) => Math.sqrt(Math.max(r.idc, 0)));
     const fit = linReg(xs, ys);
@@ -136,7 +144,9 @@ export function computeFETVtDetailed(
         fitR2: null,
         regionPoints: region.length,
         ioffUsed: ioff,
-        warning: "sqrt fit unreliable — using constant-current 10% Ion",
+        warning: opts.forceFallback
+          ? "constant-current 10% Ion, to match the other curve of the measurement"
+          : "sqrt fit unreliable — using constant-current 10% Ion",
       };
     }
   }

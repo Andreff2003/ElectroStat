@@ -5,6 +5,7 @@ import {
   applyFETResponseMode,
 } from "@/utils/fetMetrics";
 import { fetDrainCurrent } from "@/utils/fetModel";
+import { computeFETVtDetailed } from "@/utils/fetVt";
 import type { FETTransferPoint } from "@/hooks/useSimulatedData";
 
 function syntheticTransfer(vt: number, npts = 51): FETTransferPoint[] {
@@ -43,5 +44,21 @@ describe("computeFETTransferMetrics", () => {
   it("absolute mode returns |ΔVt|", () => {
     const r = applyFETResponseMode(-25, "absolute");
     expect(r.calibrationSignal_mV_used).toBe(25);
+  });
+});
+
+describe("computeFETTransferMetrics: both curves are read by the same Vt method", () => {
+  it("when only one curve needs the constant-current fallback, the other is re-read with it and a warning is added", () => {
+    const good = syntheticTransfer(0.30);
+    // an 11-point analyte curve leaves only 2 points in the 20-80 % window, so the square-root fit is refused
+    const poor = syntheticTransfer(0.30, 11);
+    expect(computeFETVtDetailed(good).method).toBe("sqrt_extrapolation");
+    expect(computeFETVtDetailed(poor).method).toBe("constant_current_fallback");
+    const m = computeFETTransferMetrics(good, poor);
+    expect(m.vtAnalyteMethod).toBe("constant_current_fallback");
+    expect(m.vtBaselineMethod).toBe("constant_current_fallback"); // was "sqrt_extrapolation" before the fix
+    expect(m.warnings?.some((w) => /both curves/.test(w))).toBe(true);
+    // and the shift is now that of two like-for-like readings, not hundreds of mV off
+    expect(Math.abs(m.deltaVt_mV!)).toBeLessThan(60);
   });
 });
