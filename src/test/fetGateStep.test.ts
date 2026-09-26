@@ -35,14 +35,14 @@ describe("BioFET gate-sweep step", () => {
     for (const x of [s10, s40, s80]) expect(Math.abs(x.mean - 200)).toBeLessThan(10);
   });
 
-  it("the panel grades the step through the points in the Vt window: green up to 40 mV, yellow at 80 mV", () => {
+  it("the panel grades the step through the points in the Vt window: green up to 40 mV, yellow at 80 mV (4-5 points)", () => {
     const win = (points: number) => Array.from({ length: 15 }, (_, s) => {
       const p = fetPair(25, 700 + s, { points }); return computeFETQuality(p.analyte, p.baseline);
     });
     for (const pts of [201, 101, 51]) expect(win(pts).every((q) => q.windowLevel === "green" && q.level === "green")).toBe(true);
-    expect(win(51).every((q) => q.windowPoints >= 8)).toBe(true); // the default 40 mV puts ~10 points in the window
+    expect(win(51).every((q) => q.windowPoints >= 6)).toBe(true); // the default 40 mV puts ~10 points in the window
     const at80 = win(26);
-    expect(at80.every((q) => q.windowPoints >= 4 && q.windowPoints < 8)).toBe(true);
+    expect(at80.every((q) => q.windowPoints >= 4 && q.windowPoints < 6)).toBe(true);
     expect(at80.every((q) => q.windowLevel === "yellow" && q.level === "yellow")).toBe(true);
   });
 

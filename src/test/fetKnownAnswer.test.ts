@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeFETTransferMetrics } from "@/utils/fetMetrics";
 import { computeFETVtDetailed } from "@/utils/fetVt";
 import { computeFETMetrics } from "@/components/SignalQuality";
+import { computeFETQuality } from "@/utils/fetQuality";
 import { KT_Q_300K } from "@/utils/fetModel";
 import { fetPair, trueShift_mV, mean, sd } from "./fetSimHelper";
 
@@ -105,5 +106,12 @@ describe("BioFET Vt extraction with the simulator's own noise (30 sweeps per con
     expect(mean(at25)).toBeLessThan(200);
     expect(mean(at200)).toBeGreaterThan(340);
     expect(mean(at200)).toBeLessThan(356);
+  });
+
+  it("a healthy transistor stays green at 200 nM, where Vt sits high in the sweep and the fit window shrinks to 7-9 points", () => {
+    const q = Array.from({ length: 30 }, (_, i) => { const p = fetPair(200, 201 + i); return computeFETQuality(p.analyte, p.baseline); });
+    expect(q.every((x) => x.level === "green")).toBe(true);
+    expect(Math.min(...q.map((x) => x.windowPoints))).toBeGreaterThanOrEqual(6);
+    expect(Math.min(...q.map((x) => x.windowPoints))).toBeLessThan(10);
   });
 });

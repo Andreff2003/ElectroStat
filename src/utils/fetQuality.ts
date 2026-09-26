@@ -26,8 +26,12 @@ function median(values: number[]): number {
   return s.length % 2 ? s[mid] : 0.5 * (s[mid - 1] + s[mid]);
 }
 
-/** Points of the 20-80 % window the Vt line is fitted to: >= 8 green, >= 4 yellow, fewer red. */
-export const FET_WINDOW_GREEN_MIN = 8;
+/**
+ * Points of the 20-80 % window the Vt line is fitted to: >= 6 green, 4-5 yellow, fewer red. A healthy
+ * transistor at saturating concentration keeps 7-9 points (its Vt sits high in the sweep), while 4-5
+ * points already triple the scatter of the shift and fewer than 4 force the fallback.
+ */
+export const FET_WINDOW_GREEN_MIN = 6;
 export const FET_WINDOW_YELLOW_MIN = 4;
 
 /** Compute BioFET quality metrics from analyte + baseline curves. */
