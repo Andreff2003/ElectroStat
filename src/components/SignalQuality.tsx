@@ -459,7 +459,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
               value={ready ? (fetMetrics.subthresholdSlope > 0 ? `${fetMetrics.subthresholdSlope.toFixed(0)} mV/dec` : "—") : pending}
               level={fetMetrics.ssLevel}
             />
-            <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(2)} µA` : pending} level={fetMetrics.ioffLevel} />
+            <MetricRow label="Ioff Current" title="Off-state drain current. Should stay small and stable. Below 1 µA green, below 5 µA yellow, above that red." value={ready ? `${fetMetrics.ioff.toFixed(fetMetrics.ioff < 0.1 ? 3 : 2)} µA` : pending} level={fetMetrics.ioffLevel} />
 
             <MetricRow label="Vt Window Points" title="Points of the strong-inversion window (20-80 % of Ion) the threshold voltage is fitted to. It depends on the gate-voltage step. 6 or more green, 4 to 5 yellow, fewer red (below 4 the square-root fit is refused and a less accurate constant-current method is used)." value={ready ? `${fetMetrics.windowPoints}` : pending} level={fetMetrics.windowLevel} />
             <MetricRow label="Baseline Noise" title="Scatter of the baseline curve around its smooth on-state trend (RMS of the residuals of a quadratic fit, as % of the mean current, on points above 30% of Ion). <5% green, <15% yellow, else red." value={ready && fetMetrics.stabilityLevel !== "idle" ? `${fetMetrics.baselineStability.toFixed(1)} %` : ready ? "—" : pending} level={fetMetrics.stabilityLevel} />
