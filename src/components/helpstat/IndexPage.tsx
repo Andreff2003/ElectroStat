@@ -1690,7 +1690,7 @@ const Index = () => {
     { label: "CV @ 10 mM", run: () => runCvStep(10) },
   ];
   const swvPhaseSteps = [
-    { label: "SWV scan @ 0 nM", run: () => runSwvStep(0) },
+    { label: "SWV scan @ 5 nM", run: () => runSwvStep(5) },
     { label: "SWV scan @ 10 nM", run: () => runSwvStep(10) },
     { label: "SWV scan @ 50 nM", run: () => runSwvStep(50) },
   ];
