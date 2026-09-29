@@ -26,6 +26,7 @@ interface DashboardHeaderProps {
   demoPhase: DemoPhase;
   demoRunning: boolean;
   demoStep: number;
+  demoTotal: number;
   onStartDemo: () => void;
   onContinueDemo: () => void;
   onCancelDemo: () => void;
@@ -49,6 +50,7 @@ export default function DashboardHeader({
   demoPhase,
   demoRunning,
   demoStep,
+  demoTotal,
   onStartDemo,
   onContinueDemo,
   onCancelDemo,
@@ -144,7 +146,7 @@ export default function DashboardHeader({
             {demoRunning && (
               <>
                 <Button size="sm" variant="outline" disabled className="font-mono text-xs">
-                  ▶ Running {PHASE_LABEL[demoPhase === "idle" ? "eis" : demoPhase]}… ({demoStep}/3)
+                  ▶ Running {PHASE_LABEL[demoPhase === "idle" ? "eis" : demoPhase]}… ({demoStep}/{demoTotal})
                 </Button>
                 <Button size="sm" variant="ghost" onClick={onCancelDemo} className="font-mono text-xs">
                   ✕ Cancel Demo

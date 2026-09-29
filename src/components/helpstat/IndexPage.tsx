@@ -1682,6 +1682,7 @@ const Index = () => {
   const eisPhaseSteps = [
     { label: "EIS @ 0 nM", run: () => runEisStep(0) },
     { label: "EIS @ 10 nM", run: () => runEisStep(10) },
+    { label: "EIS @ 50 nM", run: () => runEisStep(50) },
     { label: "EIS @ 100 nM", run: () => runEisStep(100) },
   ];
   const cvPhaseSteps = [
@@ -1697,6 +1698,7 @@ const Index = () => {
   const fetPhaseSteps = [
     { label: "BioFET run @ 0 nM", run: () => runFetStep(0) },
     { label: "BioFET run @ 10 nM", run: () => runFetStep(10) },
+    { label: "BioFET run @ 50 nM", run: () => runFetStep(50) },
     { label: "BioFET run @ 100 nM", run: () => runFetStep(100) },
   ];
   const PHASE_STEPS: Record<
@@ -1977,6 +1979,7 @@ const Index = () => {
         demoPhase={demoPhase}
         demoRunning={demoRunning}
         demoStep={demoStep}
+        demoTotal={PHASE_STEPS[demoPhase === "idle" || demoPhase === "done" ? "eis" : demoPhase].length}
         onStartDemo={() => runDemoPhase("eis")}
         onContinueDemo={() => {
           if (demoPhase === "eis" || demoPhase === "cv" || demoPhase === "swv" || demoPhase === "fet") {

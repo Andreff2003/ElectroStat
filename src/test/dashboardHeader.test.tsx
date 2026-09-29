@@ -17,6 +17,7 @@ function baseProps() {
     demoPhase: "idle" as const,
     demoRunning: false,
     demoStep: 0,
+    demoTotal: 3,
     onStartDemo: noop,
     onContinueDemo: noop,
     onCancelDemo: noop,
