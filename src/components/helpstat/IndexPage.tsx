@@ -1397,7 +1397,8 @@ const Index = () => {
     if (demoRunning) {
       setCvOverlays((prev) => {
         const label =
-          cvParams.cMM > 0 ? `${cvParams.cMM} mM` : `Blank ${prev.length + 1}`;
+          (cvParams.cMM > 0 ? `${cvParams.cMM} mM` : `Blank ${prev.length + 1}`) +
+          ` · ${cvParams.cvModel}`;
         const color = OVERLAY_COLORS[prev.length % OVERLAY_COLORS.length];
         const next = [
           ...prev,
