@@ -15,6 +15,7 @@
  * All exports go through the shared csvExport helpers so the session CSV
  * automatically picks up SWV measurements written to the session store.
  */
+import { swvOverlayLabel } from "@/utils/swvAxis";
 import { Hint, InfoHint } from "@/components/InfoHint";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -227,8 +228,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
         autoCapturedRef.current.add(measurementId);
         const snapshot = data.slice();
         setOverlays((prev) => {
-          const label =
-            (concentration ?? 0) > 0 ? `${concentration} nM` : `Blank ${prev.length + 1}`;
+          const label = swvOverlayLabel(concentration, params.swvModel, prev.length + 1);
           const color = OVERLAY_COLORS[prev.length % OVERLAY_COLORS.length];
           const next = [...prev, { id: newId(), label, color, data: snapshot }];
           return next.length > 8 ? next.slice(next.length - 8) : next;
@@ -393,10 +393,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
                 variant="outline"
                 onClick={() => {
                   if (data.length === 0) return;
-                  const label =
-                    (params.concentration_nM ?? 0) > 0
-                      ? `${params.concentration_nM} nM`
-                      : `Blank ${overlays.length + 1}`;
+                  const label = swvOverlayLabel(params.concentration_nM, params.swvModel, overlays.length + 1);
                   const color = OVERLAY_COLORS[overlays.length % OVERLAY_COLORS.length];
                   setOverlays((prev) => {
                     const next = [

@@ -13,6 +13,7 @@ import {
   Legend,
 } from "recharts";
 import type { SWVDataPoint, SWVMetrics } from "@/types/swv";
+import { swvCurrentAxis, formatSwvTick } from "@/utils/swvAxis";
 
 type ChartMouseEvent = {
   activeLabel?: number | string;
@@ -87,8 +88,8 @@ export default function SWVPlot({
     }));
   }, [data, corrected, effectiveMode]);
 
-  // Tick precision follows the visible current span: nA-level scans (nM
-  // analyte) would otherwise print as 0.00 on every tick.
+  // Axis unit and tick precision follow the visible current span: nA-level scans
+  // (nM analyte) are drawn in nA, not as 0.00 on every µA tick.
   const ySpan = useMemo(() => {
     let lo = Infinity;
     let hi = -Infinity;
@@ -108,9 +109,7 @@ export default function SWVPlot({
   } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const visibleSpan = zoomDomain ? zoomDomain.y[1] - zoomDomain.y[0] : ySpan;
-  const yDecimals = visibleSpan > 0
-    ? Math.min(8, Math.max(2, Math.ceil(-Math.log10(visibleSpan / 5))))
-    : 2;
+  const yAxisScale = swvCurrentAxis(visibleSpan);
 
   const getX = (e: ChartMouseEvent | null | undefined): number | null => {
     if (!e) return null;
@@ -207,9 +206,9 @@ export default function SWVPlot({
           <YAxis
             domain={zoomDomain ? zoomDomain.y : ["auto", "auto"]}
             allowDataOverflow
-            label={compact ? undefined : { value: "I / µA", angle: -90, position: "insideLeft" }}
+            label={compact ? undefined : { value: `I / ${yAxisScale.unit}`, angle: -90, position: "insideLeft" }}
             tick={{ fontSize: compact ? 9 : 11 }}
-            tickFormatter={(v: number) => v.toFixed(yDecimals)}
+            tickFormatter={(v: number) => formatSwvTick(v, yAxisScale)}
           />
           <Tooltip
             contentStyle={{
