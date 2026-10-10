@@ -45,20 +45,27 @@
       concentration after — compare the two via the app's Overlay
       view, same as with simulated data. Also runs a time-response
       phase (Id vs time at a fixed readout bias) right after the
-      transfer curve, paced in real elapsed time. UNTESTED against
-      real hardware. Same +-1.1V range limit as CV.
+      transfer curve, on a fixed schedule with real timestamps.
+      UNTESTED against real hardware. Same +-1.1V range limit as CV.
     - SWV (start_swv): implemented as new code, on the same
       amperometric primitive as CV/BioFET. Applies a square wave on a
-      staircase ramp — forward pulse at E_step + pulseSign*Esw, hold
-      one half-period (1/(2*frequency_Hz)), sample; then the reverse
-      pulse at E_step - pulseSign*Esw, hold, sample again; INet =
-      IForward - IReverse. pulseSign follows the ramp direction
-      (endE >= startE -> +1), matching swvDiffusionSolver.ts's
-      convention. UNTESTED against real hardware — the half-period
-      hold time is an approximation, not calibrated against a scope.
+      staircase ramp — forward pulse at E_step + pulseSign*Esw, held
+      one half-period (1/(2*frequency_Hz)) and sampled at its end;
+      then the reverse pulse at E_step - pulseSign*Esw, held and
+      sampled at its end; INet = IForward - IReverse. pulseSign follows
+      the ramp direction (endE >= startE -> +1), matching
+      swvDiffusionSolver.ts's convention. UNTESTED against real
+      hardware — the settling time assumed after each potential step
+      (kSettleUs) is an unmeasured guess to be set with a scope.
       Same +-1.1V (window +- pulse amplitude) range limit as CV.
-    - "stop" cannot interrupt any sweep already in progress in this
-      version — a running sweep must finish on its own.
+    - TIMING (CV, BioFET, SWV): fixed-schedule slots, current read at the
+      end of each slot, real timestamps, and a refusal (cv_error /
+      swv_error / fet_error naming the limit) when the requested scan
+      rate or frequency does not fit the board's read time. Each *_done
+      message carries lateCount, maxLagUs and the achieved scan rate or
+      frequency. See "Real-time sweeps" below and ElectroStat_Timing.h.
+    - "stop" interrupts CV, BioFET and SWV between points. It cannot
+      interrupt EIS, which runs inside the HELPStat library.
     - microSD backup: NEW. Every point sent over WiFi during a run is
       also appended to a per-run .jsonl file under /backup on the SD
       card (see the "microSD backup" comment above sendLine()), so a
@@ -86,6 +93,7 @@
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include "HELPStat.h"
+#include "ElectroStat_Timing.h"
 
 // ── WiFi access point ──────────────────────────────────────────
 // ESP32 SoftAP always gets 192.168.4.1 as its own IP unless you
@@ -170,13 +178,26 @@ String backupFilename(const char *technique) {
   return String("/backup/") + technique + "_" + String(millis()) + ".jsonl";
 }
 
+// One handle for the whole run. Opening and closing the file for every line
+// (what this did before) costs tens of milliseconds on a FAT card, more than a
+// CV step lasts. The file is flushed every 20 lines and when the run ends, so a
+// power cut loses at most the last 19 lines.
+static File backupFile;
+static int backupLinesSinceFlush = 0;
+
 void startBackup(const char *technique) {
   if (!sdAvailable) return;
   currentBackupFile = backupFilename(technique);
+  backupFile = SD.open(currentBackupFile, FILE_APPEND);
+  backupLinesSinceFlush = 0;
   Serial.printf("[SD] Backing up this run to %s\n", currentBackupFile.c_str());
 }
 
 void stopBackup() {
+  if (backupFile) {
+    backupFile.flush();
+    backupFile.close();
+  }
   currentBackupFile = "";
 }
 
@@ -196,11 +217,11 @@ void sendLine(const String &line) {
     tcpClient.print('\n');
   }
   Serial.println(line);
-  if (sdAvailable && currentBackupFile.length() > 0) {
-    File f = SD.open(currentBackupFile, FILE_APPEND);
-    if (f) {
-      f.println(line);
-      f.close();
+  if (sdAvailable && backupFile) {
+    backupFile.println(line);
+    if (++backupLinesSinceFlush >= 20) {
+      backupFile.flush();
+      backupLinesSinceFlush = 0;
     }
     // If this fails (card removed mid-run, etc.) we deliberately don't
     // retry or error out — the live WiFi path must keep working either
@@ -212,6 +233,202 @@ void sendJson(JsonDocument &doc) {
   String out;
   serializeJson(doc, out);
   sendLine(out);
+}
+
+// ── Real-time sweeps ───────────────────────────────────────────────
+// CV, BioFET and SWV run on a fixed schedule (see ElectroStat_Timing.h).
+// Three things make that possible here:
+//  1. Each potential step owns a slot that starts at t0 + k * period. The
+//     potential is applied when the slot opens and the current is read so that
+//     the conversion ends at the end of the slot. Time spent measuring or
+//     sending cannot accumulate into a slower scan.
+//  2. Points are not sent from inside the slot. They are queued, and sent while
+//     the loop waits for the next slot, only when a send is expected to finish
+//     before it (sendCostUs is the slowest recent send, with slow decay). The
+//     queue is drained when the sweep ends.
+//  3. Every wait also listens for "stop", so a sweep can be interrupted. EIS
+//     runs inside the HELPStat library and still cannot.
+// The sweep reports its own timing (lateCount, maxLagUs, achieved scan rate or
+// frequency) in the *_done message, so a scan that could not keep its schedule
+// is visible instead of silently slow. UNTESTED against real hardware: only
+// the arithmetic in ElectroStat_Timing.h is covered by firmware/test.
+
+// Forward declarations: the senders are defined further down.
+void sendCvPoint(float E, int cycle, float t, const char *branch, float current_uA, bool outOfRange);
+void sendFetTransferPoint(const char *curve, float vg, float id_uA, float concentration, bool outOfRange);
+void sendFetTimePoint(float t, float id_uA, float vgRead, bool outOfRange);
+void sendSwvPoint(float E, float iForward_uA, float iReverse_uA, float t,
+                  int index, const char *direction, bool outOfRange);
+
+// Time the LPDAC/HSTIA path is assumed to need after a potential step. This is
+// the old delay(5), an empirical guess nobody has measured. Put a scope on the
+// working electrode, find the real settling time, and lower this (it sets the
+// fastest scan rate and the highest SWV frequency the board accepts).
+static const uint32_t kSettleUs = 5000;
+// Margin between the end of a read and the end of its slot.
+static const uint32_t kGuardUs = 300;
+// A slot that opens more than this late counts as late.
+static const int32_t kLateUs = 500;
+
+static bool sweepActive = false;     // CV, BioFET or SWV is running
+static bool abortRequested = false;  // "stop" arrived while it was
+
+enum PointKind : uint8_t { PK_CV, PK_SWV, PK_FET_TRANSFER, PK_FET_TIME };
+struct PendingPoint {
+  uint8_t kind;
+  float a, b, c, d;   // payload, see sendPending()
+  int32_t i0;
+  bool oor;
+  const char *s;      // branch / direction / curve; valid until the handler returns
+};
+static const int OUTBOX_SIZE = 128;
+static PendingPoint outbox[OUTBOX_SIZE];
+static int outboxHead = 0;
+static int outboxCount = 0;
+static uint32_t sendCostUs = 6000;  // slowest recent send
+
+static void sendPending(const PendingPoint &p) {
+  switch (p.kind) {
+    case PK_CV:           sendCvPoint(p.a, p.i0, p.c, p.s, p.b, p.oor); break;
+    case PK_SWV:          sendSwvPoint(p.a, p.b, p.c, p.d, p.i0, p.s, p.oor); break;
+    case PK_FET_TRANSFER: sendFetTransferPoint(p.s, p.a, p.b, p.c, p.oor); break;
+    case PK_FET_TIME:     sendFetTimePoint(p.a, p.b, p.c, p.oor); break;
+  }
+}
+
+static void outboxSendOne() {
+  if (outboxCount == 0) return;
+  PendingPoint p = outbox[outboxHead];
+  outboxHead = (outboxHead + 1) % OUTBOX_SIZE;
+  outboxCount--;
+  uint32_t t0 = micros();
+  sendPending(p);
+  uint32_t dt = micros() - t0;
+  sendCostUs = (dt > sendCostUs) ? dt : (sendCostUs * 15u + dt) / 16u;
+}
+
+static void outboxFlush() {
+  while (outboxCount > 0) outboxSendOne();
+}
+
+static void outboxPush(const PendingPoint &p) {
+  if (outboxCount >= OUTBOX_SIZE) outboxSendOne();  // full: pay for a send now (the slot will show as late)
+  outbox[(outboxHead + outboxCount) % OUTBOX_SIZE] = p;
+  outboxCount++;
+}
+
+// Reads one waiting line from WiFi or USB and acts only on "stop"; anything
+// else is dropped, since a sweep is already running.
+static void pollForStop() {
+  String line;
+  if (tcpClient && tcpClient.connected() && tcpClient.available()) {
+    line = tcpClient.readStringUntil('\n');
+  } else if (Serial.available()) {
+    line = Serial.readStringUntil('\n');
+  } else {
+    return;
+  }
+  line.trim();
+  if (line.length() == 0) return;
+  JsonDocument cmd;
+  if (deserializeJson(cmd, line)) return;
+  const char *command = cmd["command"] | "";
+  if (strncmp(command, "stop", 4) == 0) {
+    abortRequested = true;
+    Serial.println("[CMD] stop received during a sweep");
+  } else {
+    Serial.printf("[CMD] %s ignored: a sweep is running\n", command);
+  }
+}
+
+// Waits until the micros() deadline. Meanwhile it sends queued points while
+// there is time for one to finish, and checks for "stop" every 2 ms. Returns
+// early when a stop arrives; callers check abortRequested afterwards.
+static void waitUntilUs(uint32_t deadlineUs) {
+  static uint32_t lastPollUs = 0;
+  for (;;) {
+    uint32_t now = micros();
+    int32_t rem = estat::remainingUs(now, deadlineUs);
+    if (rem <= 0 || abortRequested) return;
+    if ((uint32_t)(now - lastPollUs) >= 2000u) {
+      lastPollUs = now;
+      pollForStop();
+      if (abortRequested) return;
+    }
+    if (outboxCount > 0 && rem > (int32_t)(sendCostUs + 300u)) {
+      outboxSendOne();
+      continue;
+    }
+    if (rem > 2500) {
+      uint32_t ms = (uint32_t)(rem - 1500) / 1000u;  // yields to the WiFi stack, leaves ~1.5 ms to spare
+      delay(ms > 20u ? 20u : ms);
+    } else {
+      delayMicroseconds(rem > 100 ? 50 : 10);        // last stretch: poll the clock
+    }
+  }
+}
+
+// One slot of a real-time sweep: apply biasMv when the slot opens, read so the
+// conversion ends kGuardUs before it closes. Returns false if a stop arrived.
+static bool rtSlot(const estat::StepClock &clk, uint32_t k, float biasMv, float rtiaOhms,
+                   uint32_t convUs, estat::SweepStats &st,
+                   float *current_uA, bool *outOfRange, uint32_t *readEndUs) {
+  uint32_t slotStart = clk.due(k);
+  waitUntilUs(slotStart);
+  if (abortRequested) return false;
+  int32_t lag = (int32_t)(micros() - slotStart);
+  helpstat.AD5940_AmperometrySetBias(biasMv);
+  uint32_t readAt = slotStart + estat::readOffsetUs(clk.periodUs, convUs, kGuardUs);
+  waitUntilUs(readAt);
+  if (abortRequested) return false;
+  uint32_t r0 = micros();
+  *current_uA = helpstat.AD5940_AmperometryRead(rtiaOhms, outOfRange);
+  uint32_t r1 = micros();
+  int32_t readLag = (int32_t)(r0 - readAt);
+  if (readLag > lag) lag = readLag;
+  st.note(r1, lag, r1 - r0, kLateUs);
+  *readEndUs = r1;
+  return true;
+}
+
+// Measures how long one ADC read takes on this board (three reads at biasMv)
+// and returns the slowest. 0 means the ADC never answered.
+static uint32_t calibrateReadUs(float biasMv, float rtiaOhms) {
+  helpstat.AD5940_AmperometrySetBias(biasMv);
+  delay((kSettleUs + 999u) / 1000u);
+  uint32_t slowest = 0;
+  for (int i = 0; i < 3; i++) {
+    uint32_t t0 = micros();
+    float v = helpstat.AD5940_AmperometryRead(rtiaOhms, nullptr);
+    uint32_t dt = micros() - t0;
+    if (isnan(v)) return 0;
+    if (dt > slowest) slowest = dt;
+  }
+  return slowest;
+}
+
+static void sendSweepError(const char *type, const char *message) {
+  JsonDocument err;
+  err["type"] = type;
+  err["message"] = message;
+  sendJson(err);
+}
+
+static void broadcastIdle() {
+  JsonDocument s1; s1["type"] = "eis_status";  s1["status"] = "idle"; sendJson(s1);
+  JsonDocument s2; s2["type"] = "cv_status";   s2["status"] = "idle"; sendJson(s2);
+  JsonDocument s3; s3["type"] = "fet_status";  s3["status"] = "idle"; sendJson(s3);
+  JsonDocument s4; s4["type"] = "swv_status";  s4["status"] = "idle"; sendJson(s4);
+}
+
+// Ends a sweep that was stopped: deliver what was measured, report idle.
+static void finishStopped(const char *label) {
+  outboxFlush();
+  broadcastIdle();
+  stopBackup();
+  abortRequested = false;
+  sweepActive = false;
+  Serial.printf("[%s] sweep stopped on request\n", label);
 }
 
 // ── EIS point callback — called by HELPStat::AD5940_DFTMeasure() for
@@ -338,26 +555,38 @@ void sendCvPoint(float E, int cycle, float t, const char *branch, float current_
   sendJson(doc);
 }
 
-// Steps the applied potential from `from` to `to` in increments of stepV,
-// measuring current and streaming one cv_data point per step. *tRef is
-// advanced by stepDelayMs (in seconds) each step, approximating the
-// requested scan rate — timing has not been calibrated against real
-// hardware yet (see the firmware README). Returns the final E reached.
-float cvRampTo(float from, float to, const char *branch, int cycle,
-               float stepV, unsigned long stepDelayMs, float *tRef) {
+// One CV step: queue the point measured in slot k, at potential E.
+static bool cvStep(estat::StepClock &clk, uint32_t &k, uint32_t convUs, estat::SweepStats &st,
+                   float E, int cycle, const char *branch) {
+  float current_uA = 0.0f;
+  bool outOfRange = false;
+  uint32_t readEnd = 0;
+  if (!rtSlot(clk, k, E * 1000.0f, cvRtiaOhms, convUs, st, &current_uA, &outOfRange, &readEnd)) return false;
+  k++;
+  if (outOfRange) cvOutOfRangeCount++;
+  PendingPoint p = {};
+  p.kind = PK_CV;
+  p.a = E;
+  p.b = current_uA;
+  p.c = (float)(uint32_t)(readEnd - clk.t0Us) / 1.0e6f;  // real time of the reading
+  p.i0 = cycle;
+  p.s = branch;
+  p.oor = outOfRange;
+  outboxPush(p);
+  return true;
+}
+
+// Steps the applied potential from `from` to `to` in increments of stepV, one
+// slot per step. Returns the final E reached (short of `to` if a stop arrived).
+float cvRampTo(float from, float to, const char *branch, int cycle, float stepV,
+               estat::StepClock &clk, uint32_t &k, uint32_t convUs, estat::SweepStats &st) {
   float delta = to - from;
   if (fabs(delta) < 1e-9f) return from;
   int nSteps = max(1, (int)ceil(fabs(delta) / stepV));
   float E = from;
-  for (int k = 1; k <= nSteps; k++) {
-    float frac = (float)k / (float)nSteps;
-    E = from + delta * frac;
-    bool outOfRange = false;
-    float current_uA = helpstat.AD5940_AmperometryStep(E * 1000.0f, cvRtiaOhms, &outOfRange);
-    if (outOfRange) cvOutOfRangeCount++;
-    *tRef += stepDelayMs / 1000.0f;
-    sendCvPoint(E, cycle, *tRef, branch, current_uA, outOfRange);
-    delay(stepDelayMs);
+  for (int j = 1; j <= nSteps; j++) {
+    E = from + delta * ((float)j / (float)nSteps);
+    if (!cvStep(clk, k, convUs, st, E, cycle, branch)) break;
   }
   return E;
 }
@@ -400,7 +629,30 @@ void handleStartCv(JsonDocument &cmd) {
                   "sweep will clip at the extremes.\n", maxAbsE);
   }
 
+  // Plan the schedule before announcing "running": measure how long one read
+  // takes on this board and check that a step's slot can hold it.
+  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(cvRtiaOhms));
+  uint32_t readUs = calibrateReadUs(eStart * 1000.0f, cvRtiaOhms);
+  if (readUs == 0) {
+    sendSweepError("cv_error", "the ADC did not answer during the read-time check");
+    return;
+  }
+  uint32_t convUs = estat::convEstimateUs(readUs);
+  uint32_t periodUs = estat::periodFromScanRate(stepMv, scanRate);
+  estat::SlotPlan plan = estat::planSlot(periodUs, kSettleUs, convUs, kGuardUs);
+  if (!plan.ok) {
+    char msg[220];
+    snprintf(msg, sizeof(msg),
+             "scanRate too fast for stepMv: each step needs %.1f ms (settling, ADC read, margin), "
+             "so with a %.1f mV step the fastest scan is %.0f mV/s. Raise the step or lower the rate.",
+             plan.minPeriodUs / 1000.0f, stepMv, estat::maxScanRate_mVs(stepMv, plan.minPeriodUs));
+    sendSweepError("cv_error", msg);
+    return;
+  }
+
   cvSweepInProgress = true;
+  sweepActive = true;
+  abortRequested = false;
   startBackup("cv");
   {
     JsonDocument status;
@@ -409,42 +661,58 @@ void handleStartCv(JsonDocument &cmd) {
     sendJson(status);
   }
 
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(cvRtiaOhms));
-
+  // Hold the start potential for the quiet time, so the solution settles at it.
+  helpstat.AD5940_AmperometrySetBias(eStart * 1000.0f);
   if (quietTime > 0) {
-    delay((unsigned long)(min(quietTime, 2.0f) * 1000.0f));
+    waitUntilUs(micros() + (uint32_t)(min(quietTime, 60.0f) * 1.0e6f));
   }
 
   float stepV = stepMv / 1000.0f;
-  unsigned long stepDelayMs = (unsigned long)max(1.0f, (stepMv / scanRate) * 1000.0f);
-
-  float t = 0.0f;
+  estat::StepClock clk;
+  clk.begin(micros() + 2000u, periodUs);
+  estat::SweepStats st;
+  uint32_t k = 0;
   float cur = eStart;
-  bool firstOutOfRange = false;
-  float firstCurrent = helpstat.AD5940_AmperometryStep(eStart * 1000.0f, cvRtiaOhms, &firstOutOfRange);
-  if (firstOutOfRange) cvOutOfRangeCount++;
-  sendCvPoint(eStart, 1, 0.0f, "forward", firstCurrent, firstOutOfRange);
-
-  for (int c = 1; c <= nCycles; c++) {
-    cur = cvRampTo(cur, eV1, "forward", c, stepV, stepDelayMs, &t);
-    cur = cvRampTo(cur, eV2, "reverse", c, stepV, stepDelayMs, &t);
+  bool ok = !abortRequested && cvStep(clk, k, convUs, st, eStart, 1, "forward");
+  for (int c = 1; ok && c <= nCycles; c++) {
+    cur = cvRampTo(cur, eV1, "forward", c, stepV, clk, k, convUs, st);
+    if (abortRequested) break;
+    cur = cvRampTo(cur, eV2, "reverse", c, stepV, clk, k, convUs, st);
+    if (abortRequested) break;
     if (c < nCycles && fabs(cur - eStart) > 1e-6f) {
-      cur = cvRampTo(cur, eStart, "return", c, stepV, stepDelayMs, &t);
+      cur = cvRampTo(cur, eStart, "return", c, stepV, clk, k, convUs, st);
+      if (abortRequested) break;
     }
   }
 
   cvSweepInProgress = false;
+  if (abortRequested) {
+    finishStopped("CV");
+    return;
+  }
+  outboxFlush();
+  sweepActive = false;
   if (cvOutOfRangeCount > 0) {
     Serial.printf("[CV] WARNING: %d point(s) had HSTIA output outside the "
                   "AD5941's 0.2-2.1V ADC window at RTIA=%.0f ohms — those "
                   "readings may be inaccurate. Try a different RTIA Gain.\n",
                   cvOutOfRangeCount, cvRtiaOhms);
   }
+  if (st.late > 0) {
+    Serial.printf("[CV] WARNING: %u of %u step(s) started late (worst %d us) — "
+                  "the scan ran slower than requested at those points.\n",
+                  (unsigned)st.late, (unsigned)st.n, (int)st.maxLagUs);
+  }
   {
     JsonDocument done;
     done["type"] = "cv_done";
     done["cycle"] = nCycles;
     done["outOfRangeCount"] = cvOutOfRangeCount;
+    done["lateCount"] = st.late;
+    done["maxLagUs"] = st.maxLagUs;
+    done["readUs"] = st.maxReadUs;
+    float meanS = st.meanPeriodS();
+    if (meanS > 0.0f) done["achievedScanRate_mVs"] = stepMv / meanS;
     sendJson(done);
   }
   {
@@ -541,7 +809,37 @@ void handleStartFet(JsonDocument &cmd) {
   Serial.printf("[FET] curve=%s vgMin=%.3f vgMax=%.3f vgStep=%.3f C=%.2f\n",
                 curve, vgMin, vgMax, vgStep, concentration);
 
+  // Plan the schedule before announcing "running" (see handleStartCv).
+  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(fetRtiaOhms));
+  uint32_t readUs = calibrateReadUs(vgMin * 1000.0f, fetRtiaOhms);
+  if (readUs == 0) {
+    sendSweepError("fet_error", "the ADC did not answer during the read-time check");
+    return;
+  }
+  uint32_t convUs = estat::convEstimateUs(readUs);
+  uint32_t intervalUs = (uint32_t)max(1, intervalMs) * 1000u;
+  uint32_t timeStepUs = (uint32_t)(max(timeStep, 0.01f) * 1.0e6f);
+  estat::SlotPlan transferPlan = estat::planSlot(intervalUs, kSettleUs, convUs, kGuardUs);
+  if (!transferPlan.ok) {
+    char msg[200];
+    snprintf(msg, sizeof(msg),
+             "intervalMs too short: each point needs %.1f ms (settling, ADC read, margin). Use at least %.0f ms.",
+             transferPlan.minPeriodUs / 1000.0f, ceilf(transferPlan.minPeriodUs / 1000.0f));
+    sendSweepError("fet_error", msg);
+    return;
+  }
+  if (timeStepUs < convUs + kGuardUs) {
+    char msg[200];
+    snprintf(msg, sizeof(msg),
+             "timeStep_s too short: one read takes %.1f ms. Use at least %.3f s.",
+             convUs / 1000.0f, (convUs + kGuardUs) / 1.0e6f);
+    sendSweepError("fet_error", msg);
+    return;
+  }
+
   fetSweepInProgress = true;
+  sweepActive = true;
+  abortRequested = false;
   startBackup("fet");
   {
     JsonDocument status;
@@ -550,41 +848,82 @@ void handleStartFet(JsonDocument &cmd) {
     sendJson(status);
   }
 
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(fetRtiaOhms));
-
   // ── Phase 1: transfer curve (Id vs Vg) ──────────────────────────
+  // One slot per gate voltage, intervalMs long: Vg is applied when the slot
+  // opens and Id is read at its end.
   int direction = (vgMax >= vgMin) ? 1 : -1;
   int nSteps = max(1, (int)round(fabs(vgMax - vgMin) / vgStep));
-  for (int i = 0; i <= nSteps; i++) {
+  estat::SweepStats stTransfer, stTime;
+  estat::StepClock clk;
+  clk.begin(micros() + 2000u, intervalUs);
+  bool ok = true;
+  for (int i = 0; ok && i <= nSteps; i++) {
     float vg = vgMin + direction * i * vgStep;
+    float id_uA = 0.0f;
     bool outOfRange = false;
-    float id_uA = helpstat.AD5940_AmperometryStep(vg * 1000.0f, fetRtiaOhms, &outOfRange);
+    uint32_t readEnd = 0;
+    ok = rtSlot(clk, (uint32_t)i, vg * 1000.0f, fetRtiaOhms, convUs, stTransfer, &id_uA, &outOfRange, &readEnd);
+    if (!ok) break;
     if (outOfRange) fetOutOfRangeCount++;
-    sendFetTransferPoint(curve, vg, id_uA, concentration, outOfRange);
-    delay(max(1, intervalMs));
+    PendingPoint p = {};
+    p.kind = PK_FET_TRANSFER;
+    p.a = vg;
+    p.b = id_uA;
+    p.c = concentration;
+    p.s = curve;
+    p.oor = outOfRange;
+    outboxPush(p);
   }
 
   // ── Phase 2: time response at the fixed readout bias ────────────
   // Real elapsed time, not simulator playback speed — add the analyte
   // manually whenever you're ready during this phase, the resulting
-  // shift shows up in the Id-vs-time data itself.
+  // shift shows up in the Id-vs-time data itself. The bias is applied once;
+  // each sample is then taken at t0 + i * timeStep, and stamped with the
+  // time it was actually read.
   int timePoints = max(1, (int)(timeDuration / max(timeStep, 0.01f)) + 1);
-  unsigned long stepMs = (unsigned long)max(1.0f, timeStep * 1000.0f);
-  for (int i = 0; i < timePoints; i++) {
-    float t = i * timeStep;
-    bool outOfRange = false;
-    float id_uA = helpstat.AD5940_AmperometryStep(readoutBias * 1000.0f, fetRtiaOhms, &outOfRange);
-    if (outOfRange) fetOutOfRangeCount++;
-    sendFetTimePoint(t, id_uA, readoutBias, outOfRange);
-    delay(stepMs);
+  if (ok) {
+    helpstat.AD5940_AmperometrySetBias(readoutBias * 1000.0f);
+    estat::StepClock clkT;
+    clkT.begin(micros() + kSettleUs, timeStepUs);
+    for (int i = 0; i < timePoints; i++) {
+      uint32_t due = clkT.due((uint32_t)i);
+      waitUntilUs(due);
+      if (abortRequested) { ok = false; break; }
+      uint32_t r0 = micros();
+      bool outOfRange = false;
+      float id_uA = helpstat.AD5940_AmperometryRead(fetRtiaOhms, &outOfRange);
+      uint32_t r1 = micros();
+      stTime.note(r1, (int32_t)(r0 - due), r1 - r0, kLateUs);
+      if (outOfRange) fetOutOfRangeCount++;
+      PendingPoint p = {};
+      p.kind = PK_FET_TIME;
+      p.a = (float)(uint32_t)(r0 - clkT.t0Us) / 1.0e6f;
+      p.b = id_uA;
+      p.c = readoutBias;
+      p.oor = outOfRange;
+      outboxPush(p);
+    }
   }
 
   fetSweepInProgress = false;
+  if (!ok || abortRequested) {
+    finishStopped("FET");
+    return;
+  }
+  outboxFlush();
+  sweepActive = false;
+  uint32_t lateTotal = stTransfer.late + stTime.late;
+  int32_t worstLag = stTransfer.maxLagUs > stTime.maxLagUs ? stTransfer.maxLagUs : stTime.maxLagUs;
   if (fetOutOfRangeCount > 0) {
     Serial.printf("[FET] WARNING: %d point(s) had HSTIA output outside the "
                   "AD5941's 0.2-2.1V ADC window at RTIA=%.0f ohms — those "
                   "readings may be inaccurate. Try a different RTIA Gain.\n",
                   fetOutOfRangeCount, fetRtiaOhms);
+  }
+  if (lateTotal > 0) {
+    Serial.printf("[FET] WARNING: %u point(s) started late (worst %d us).\n",
+                  (unsigned)lateTotal, (int)worstLag);
   }
   {
     JsonDocument done;
@@ -592,6 +931,8 @@ void handleStartFet(JsonDocument &cmd) {
     done["transferPoints"] = nSteps + 1;
     done["timePoints"] = timePoints;
     done["outOfRangeCount"] = fetOutOfRangeCount;
+    done["lateCount"] = lateTotal;
+    done["maxLagUs"] = worstLag;
     sendJson(done);
   }
   {
@@ -680,7 +1021,29 @@ void handleStartSwv(JsonDocument &cmd) {
                   maxAbsE, esw);
   }
 
+  // Plan the schedule before announcing "running" (see handleStartCv).
+  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(swvRtiaOhms));
+  uint32_t readUs = calibrateReadUs(startE * 1000.0f, swvRtiaOhms);
+  if (readUs == 0) {
+    sendSweepError("swv_error", "the ADC did not answer during the read-time check");
+    return;
+  }
+  uint32_t convUs = estat::convEstimateUs(readUs);
+  uint32_t halfUs = estat::halfPeriodFromFrequency(frequencyHz);
+  estat::SlotPlan plan = estat::planSlot(halfUs, kSettleUs, convUs, kGuardUs);
+  if (!plan.ok) {
+    char msg[200];
+    snprintf(msg, sizeof(msg),
+             "frequency_Hz too high: each half-pulse needs %.1f ms (settling, ADC read, margin), "
+             "so the highest frequency is %.0f Hz.",
+             plan.minPeriodUs / 1000.0f, estat::maxFrequencyHz(plan.minPeriodUs));
+    sendSweepError("swv_error", msg);
+    return;
+  }
+
   swvSweepInProgress = true;
+  sweepActive = true;
+  abortRequested = false;
   startBackup("swv");
   {
     JsonDocument status;
@@ -689,48 +1052,76 @@ void handleStartSwv(JsonDocument &cmd) {
     sendJson(status);
   }
 
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(swvRtiaOhms));
-
+  // Hold the start potential for the quiet time, so the solution settles at it.
+  helpstat.AD5940_AmperometrySetBias(startE * 1000.0f);
   if (quietTimeS > 0) {
-    delay((unsigned long)(min(quietTimeS, 2.0f) * 1000.0f));
+    waitUntilUs(micros() + (uint32_t)(min(quietTimeS, 60.0f) * 1.0e6f));
   }
 
   float stepV = stepMv / 1000.0f;
   int pulseSign = (endE >= startE) ? 1 : -1;
   int nSteps = (int)floor(fabs(endE - startE) / stepV + 1e-6f) + 1;
-  unsigned long halfPeriodMs = (unsigned long)max(1.0f, 1000.0f / (2.0f * frequencyHz));
-  float period = 1.0f / frequencyHz;
 
-  for (int i = 0; i < nSteps; i++) {
+  // Every half-pulse is one slot of halfUs: the forward pulse of step i is slot
+  // 2i, the reverse pulse slot 2i+1, each sampled at its own end.
+  estat::StepClock clk;
+  clk.begin(micros() + 2000u, halfUs);
+  estat::SweepStats st;
+  bool ok = true;
+  for (int i = 0; ok && i < nSteps; i++) {
     float eStep = startE + pulseSign * i * stepV;
     float eForward = eStep + pulseSign * esw;
     float eReverse = eStep - pulseSign * esw;
 
-    bool fwdOutOfRange = false;
-    float iForward = helpstat.AD5940_AmperometryStep(eForward * 1000.0f, swvRtiaOhms, &fwdOutOfRange);
-    delay(halfPeriodMs);
-    bool revOutOfRange = false;
-    float iReverse = helpstat.AD5940_AmperometryStep(eReverse * 1000.0f, swvRtiaOhms, &revOutOfRange);
-    delay(halfPeriodMs);
+    float iForward = 0.0f, iReverse = 0.0f;
+    bool fwdOutOfRange = false, revOutOfRange = false;
+    uint32_t readEndF = 0, readEndR = 0;
+    ok = rtSlot(clk, (uint32_t)(2 * i), eForward * 1000.0f, swvRtiaOhms, convUs, st, &iForward, &fwdOutOfRange, &readEndF)
+      && rtSlot(clk, (uint32_t)(2 * i + 1), eReverse * 1000.0f, swvRtiaOhms, convUs, st, &iReverse, &revOutOfRange, &readEndR);
+    if (!ok) break;
     bool outOfRange = fwdOutOfRange || revOutOfRange;
     if (outOfRange) swvOutOfRangeCount++;
 
-    float t = quietTimeS + i * period;
-    sendSwvPoint(eStep, iForward, iReverse, t, i, direction, outOfRange);
+    PendingPoint p = {};
+    p.kind = PK_SWV;
+    p.a = eStep;
+    p.b = iForward;
+    p.c = iReverse;
+    p.d = quietTimeS + (float)(uint32_t)(readEndF - clk.t0Us) / 1.0e6f;  // real time of the forward reading
+    p.i0 = i;
+    p.s = direction;
+    p.oor = outOfRange;
+    outboxPush(p);
   }
 
   swvSweepInProgress = false;
+  if (!ok || abortRequested) {
+    finishStopped("SWV");
+    return;
+  }
+  outboxFlush();
+  sweepActive = false;
   if (swvOutOfRangeCount > 0) {
     Serial.printf("[SWV] WARNING: %d point(s) had HSTIA output outside the "
                   "AD5941's 0.2-2.1V ADC window at RTIA=%.0f ohms — those "
                   "readings may be inaccurate. Try a different RTIA Gain.\n",
                   swvOutOfRangeCount, swvRtiaOhms);
   }
+  if (st.late > 0) {
+    Serial.printf("[SWV] WARNING: %u of %u half-pulse(s) started late (worst %d us) — "
+                  "the square wave ran slower than requested at those points.\n",
+                  (unsigned)st.late, (unsigned)st.n, (int)st.maxLagUs);
+  }
   {
     JsonDocument done;
     done["type"] = "swv_done";
     done["points"] = nSteps;
     done["outOfRangeCount"] = swvOutOfRangeCount;
+    done["lateCount"] = st.late;
+    done["maxLagUs"] = st.maxLagUs;
+    done["readUs"] = st.maxReadUs;
+    float meanS = st.meanPeriodS();  // time between consecutive half-pulse readings
+    if (meanS > 0.0f) done["achievedFrequency_Hz"] = 1.0f / (2.0f * meanS);
     sendJson(done);
   }
   {
@@ -743,13 +1134,12 @@ void handleStartSwv(JsonDocument &cmd) {
 }
 
 void handleStop() {
-  // Cannot interrupt a running sweep in this version — see file
-  // header. If nothing is running this is a harmless no-op, matching
-  // bridge.py's own "stop" semantics (broadcasts idle regardless).
-  JsonDocument s1; s1["type"] = "eis_status";  s1["status"] = "idle"; sendJson(s1);
-  JsonDocument s2; s2["type"] = "cv_status";   s2["status"] = "idle"; sendJson(s2);
-  JsonDocument s3; s3["type"] = "fet_status";  s3["status"] = "idle"; sendJson(s3);
-  JsonDocument s4; s4["type"] = "swv_status";  s4["status"] = "idle"; sendJson(s4);
+  // Reached from loop(), that is, when no CV, BioFET or SWV sweep is running
+  // (a stop during one of those is picked up by waitUntilUs() and ends the
+  // sweep itself). EIS runs inside the HELPStat library and cannot be
+  // interrupted. Otherwise a harmless no-op, matching bridge.py's own "stop"
+  // semantics (broadcasts idle regardless).
+  broadcastIdle();
   stopBackup();
 }
 

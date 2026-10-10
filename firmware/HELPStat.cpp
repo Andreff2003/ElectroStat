@@ -3021,7 +3021,7 @@ void HELPStat::AD5940_AmperometrySetup(uint32_t hstiaRtiaSel) {
   AD5940_HSRTIACfgS(hstiaRtiaSel);
 }
 
-float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange) {
+void HELPStat::AD5940_AmperometrySetBias(float biasMillivolts) {
   // ── Update the LPDAC bias only (cheap — no HWReset/Initialize) ──
   // Same bit-conversion formula as AD5940_TDDNoise's zeroVolt==0 branch
   // (bias centred on the 1.1 V Vzero reference, +-1100 mV range).
@@ -3041,12 +3041,9 @@ float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, boo
   lpdac_cfg.DataRst = bFALSE;
   lpdac_cfg.LpDacSW = LPDACSW_VBIAS2LPPA|LPDACSW_VBIAS2PIN|LPDACSW_VZERO2LPTIA|LPDACSW_VZERO2PIN|LPDACSW_VZERO2HSTIA;
   AD5940_LPDACCfgS(&lpdac_cfg);
+}
 
-  // Settling delay before sampling — empirical starting point, not
-  // measured on real hardware. Shorten/lengthen once you can see the
-  // actual step response on a scope.
-  delay(5);
-
+float HELPStat::AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange) {
   // ── Read the resulting HSTIA output (proven-working sequence, taken
   // from ADCNoiseTest — NOT from the broken pollADC/getADCVolt). ──
   ADCBaseCfg_Type adc_base;
@@ -3093,6 +3090,17 @@ float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, boo
   // HSTIA converts sensed current to an output voltage via I = V / Rtia;
   // returned in microamps to match the units bridge.py/the app expect.
   return (diffVolt / rtiaOhms) * 1.0e6f;
+}
+
+float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange, uint16_t settleMs) {
+  AD5940_AmperometrySetBias(biasMillivolts);
+  // Settling delay before sampling — empirical starting point, not
+  // measured on real hardware. Shorten/lengthen once you can see the
+  // actual step response on a scope. Real-time sweeps do not use this
+  // function: they call SetBias and Read separately so the read can be
+  // placed at the end of each step's slot (see ElectroStat_Firmware.ino).
+  delay(settleMs);
+  return AD5940_AmperometryRead(rtiaOhms, outOfRange);
 }
 
 /*

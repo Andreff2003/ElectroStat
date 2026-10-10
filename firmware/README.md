@@ -11,7 +11,7 @@ the simulator.
 | EIS | Implemented. Reuses the AD5941 driver from the LinnesLab HELPStat library. **Not yet tested against real hardware** — written against that library's own demo sketch and source, not verified on a board. |
 | CV | Implemented as new code — HELPStat had no CV to reuse. **Not yet tested against real hardware.** Applied-potential range limited to roughly ±1.1 V (see Known gaps). |
 | BioFET (`start_fet`) | Implemented, on the same amperometric primitive as CV. **Not yet tested against real hardware.** See "BioFET on real hardware" below for how baseline vs analyte is decided. |
-| SWV (`start_swv`) | Implemented, on the same primitive — square wave on a staircase ramp, forward/reverse pulse sampled each step. **Not yet tested against real hardware**; pulse-hold timing is an approximation, not calibrated against a scope. |
+| SWV (`start_swv`) | Implemented, on the same primitive — square wave on a staircase ramp, forward and reverse pulse each sampled at the end of its half-period. **Not yet tested against real hardware**; the settling time assumed after each potential step (`kSettleUs`) is a guess, to be set with a scope. |
 
 All four techniques are now implemented. **None of them have been run
 against real hardware yet** — do not treat any of this as validated
@@ -109,21 +109,32 @@ our discussion — Overlay is how you'd compare them either way.
   more than that will clip at the extremes; the firmware logs a
   warning to Serial when a sweep's vertices exceed it, it doesn't fail
   silently.
-- **CV/BioFET/SWV step timing is a straight `delay()` per point**, not
-  calibrated against real hardware — the actual settling/conversion
-  time per step hasn't been measured on a board yet, so real scan
-  rates / intervalMs / SWV frequency_Hz will likely need tuning once
-  you can see the timing on a scope or logic analyzer. SWV in
-  particular assumes the ~5 ms settle baked into
-  `AD5940_AmperometryStep()` plus the requested half-period is enough
-  time to actually reach the new bias before sampling — unverified.
-  BioFET's time-response phase paces itself in real elapsed time
-  (waits `timeStep_s` between reads), so that part's timing is at
-  least intentional, if not yet verified against a real binding
-  kinetics measurement.
-- **`stop` cannot interrupt a running sweep of any technique.** All
-  are blocking loops with no cancellation hook yet. A sweep must
-  finish on its own; `stop` only resets state for the *next* command.
+- **Real-time sweeps (CV, BioFET, SWV).** Each potential step owns a
+  slot that starts at `t0 + k * period`, computed from the start of the
+  sweep, so the time spent measuring and sending cannot make the scan
+  slower. The potential is applied when the slot opens and the current
+  is read so that the ADC conversion ends at the end of the slot (SWV:
+  at the end of each half-pulse). Points are queued and sent while the
+  loop waits for the next slot, never inside it. Timestamps (`t`,
+  `time`) are real, not nominal. Before a sweep the firmware reads the
+  ADC three times to measure how long a read takes on this board, and
+  **refuses** a scan rate, SWV frequency or `intervalMs` that cannot fit
+  (`cv_error` / `swv_error` / `fet_error`, naming the limit) instead of
+  running slower than asked. With the guessed 5 ms settling and an ADC
+  read of a few milliseconds, this is roughly 200 mV/s at a 2 mV step
+  and roughly 50 Hz for SWV; both limits move when the read time and
+  `kSettleUs` are measured. Each `*_done` message
+  reports `lateCount`, `maxLagUs` and the achieved scan rate or
+  frequency, so a sweep that could not keep its schedule says so. The
+  arithmetic is in `ElectroStat_Timing.h` and is tested on a PC
+  (`firmware/test`), which does not replace measuring on the board.
+- **`stop` interrupts CV, BioFET and SWV between points** (it is
+  checked every 2 ms while waiting) and the sweep reports idle after
+  delivering the points already measured. It still cannot interrupt EIS,
+  which runs inside the HELPStat library; an EIS sweep finishes on its
+  own.
+- **The quiet time is held at the start potential and is no longer
+  capped at 2 s** (the app accepts 0 to 60 s).
 - **Bluetooth Low Energy and the microSD card interface are present on
   the ESP32-S3/HELPStat hardware but only microSD is used by this
   firmware.** The vendored `HELPStat.h`/`.cpp` still carry the original
@@ -169,3 +180,49 @@ our discussion — Overlay is how you'd compare them either way.
   checked against), so getting those solid first makes it much easier
   to tell whether a BioFET/SWV problem is the shared primitive or
   something specific to that technique.
+
+## First bring-up with the board
+
+Do these in order and stop at the first step that fails.
+
+1. **Power and bus, no electrode.** Flash, open the Serial Monitor at
+   115200, check that the AP starts and that `AD5940Start` reports no
+   SPI error. Measure the calibration resistor with a multimeter and
+   put the value in `RCAL_OHMS`.
+2. **Dummy cell, EIS first.** A known resistor-capacitor network as
+   the cell. Run the app's dummy-cell check (Rs, Rct, Cdl). If it is
+   not green, fix this before anything else, every other technique
+   shares the front-end.
+3. **Check the ADC window.** Put a known resistor as the cell and read
+   the HSTIA output with a multimeter at a known bias. This confirms the
+   assumption that HSTIA_N sits at the fixed ~1.1 V Vzero (the basis of
+   the `outOfRange` flag).
+4. **Measure the read time and the settling time.** Put a scope on the
+   working electrode (or the LPDAC output). Run a CV and read the
+   `readUs` field of `cv_done`, which is the slowest ADC read. On the
+   scope, apply a 2 mV step and see how long the potential takes to
+   settle. Then lower `kSettleUs` in the `.ino` to what you measured
+   (plus margin), which raises the fastest scan rate and SWV frequency
+   the board accepts.
+5. **CV on a dummy cell, then on ferricyanide.** Resistor as the cell:
+   the current must be a straight line against E, with slope 1/R. Then
+   5 mM ferri/ferrocyanide on a screen-printed electrode at 100 mV/s
+   and a 2 mV step: ΔEp near 60 to 70 mV and ipc near the
+   Randles-Ševčík value. Check `lateCount` is 0 and
+   `achievedScanRate_mVs` is within 1 % of the request. Repeat at 50 and
+   200 mV/s.
+6. **Compare with the reference potentiostat.** The same cell, the same
+   settings, overlay the two voltammograms. This is the test that turns
+   the simulated validation into a measured one.
+7. **SWV, then BioFET.** SWV on the same probe at 25 Hz: the peak at
+   E0′, and `achievedFrequency_Hz` near 25. BioFET last, since it needs
+   the transistor, and only after the CV/SWV timing is trusted.
+8. **Stop and recovery.** Press Stop during a CV and during an SWV,
+   check the app returns to idle and the next run starts normally.
+   Unplug the WiFi mid-sweep and check the microSD backup holds the
+   points.
+9. **USB serial, attached and detached.** Run a sweep with the USB
+   cable connected to a computer with no serial monitor open, and with
+   it unplugged (battery). If the timing worsens when nothing reads the
+   USB port, the `Serial.println` echo in `sendLine()` is blocking and
+   must be disabled for sweeps.

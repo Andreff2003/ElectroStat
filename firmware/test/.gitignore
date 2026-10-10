@@ -1,0 +1,5 @@
+sim.exe
+ElectroStat_Firmware_copy.cpp
+ArduinoJson.h
+*.exe
+*.pdb

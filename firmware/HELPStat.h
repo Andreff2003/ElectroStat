@@ -466,7 +466,18 @@ class HELPStat {
          *  this function always uses (see LPDACSW_VZERO2HSTIA below), so the
          *  absolute HSTIA output voltage is Vzero + the measured
          *  differential reading. */
-        float AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange = nullptr);
+        /** Applies the bias and returns immediately (no wait, no read). */
+        void AD5940_AmperometrySetBias(float biasMillivolts);
+        /** Runs one ADC conversion at the bias already applied and returns
+         *  the current in microamps (NAN if the ADC never signals ready).
+         *  Takes a few milliseconds; real-time sweeps measure that time
+         *  once per sweep and place this call so it finishes at the end of
+         *  the step's slot. rtiaOhms and outOfRange as in
+         *  AD5940_AmperometryStep. */
+        float AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange = nullptr);
+        /** SetBias + delay(settleMs) + Read, as before (settleMs defaults to
+         *  the original 5 ms). Kept for callers that do not need timing. */
+        float AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange = nullptr, uint16_t settleMs = 5);
 };
 
 #endif
