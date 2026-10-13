@@ -21,6 +21,12 @@ extern uint32_t g_spi_us;                // cost of SetBias
 extern uint32_t g_read_us;               // cost of one ADC read
 extern float g_biasMv;
 
+// The AD5941 identification registers; the real ones come from ad5940.h.
+inline void AD5940_HWReset() {}
+inline void AD5940_Initialize() {}
+inline uint32_t AD5940_GetADIID() { return 0x4144; }
+inline uint32_t AD5940_GetChipID() { return 0x5502; }
+
 class HELPStat {
  public:
   void setEisPointCallback(EisPointCallback) {}

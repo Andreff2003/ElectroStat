@@ -115,3 +115,15 @@ struct SweepStats {
 };
 
 }  // namespace estat
+
+// A sweep point waiting in the outbox (see ElectroStat_Firmware.ino). Declared
+// here, not in the .ino, because functions that take it need the type before
+// the IDE's auto-generated prototypes.
+enum PointKind : uint8_t { PK_CV, PK_SWV, PK_FET_TRANSFER, PK_FET_TIME };
+struct PendingPoint {
+  uint8_t kind;
+  float a, b, c, d;   // payload, see sendPending()
+  int32_t i0;
+  bool oor;
+  const char *s;      // branch / direction / curve; valid until the handler returns
+};

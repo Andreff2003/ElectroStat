@@ -273,14 +273,9 @@ static const int32_t kLateUs = 500;
 static bool sweepActive = false;     // CV, BioFET or SWV is running
 static bool abortRequested = false;  // "stop" arrived while it was
 
-enum PointKind : uint8_t { PK_CV, PK_SWV, PK_FET_TRANSFER, PK_FET_TIME };
-struct PendingPoint {
-  uint8_t kind;
-  float a, b, c, d;   // payload, see sendPending()
-  int32_t i0;
-  bool oor;
-  const char *s;      // branch / direction / curve; valid until the handler returns
-};
+// PointKind and PendingPoint live in ElectroStat_Timing.h: the IDE inserts
+// auto-generated prototypes above the first function, so a type used in a
+// function signature must come from a header.
 static const int OUTBOX_SIZE = 128;
 static PendingPoint outbox[OUTBOX_SIZE];
 static int outboxHead = 0;
@@ -713,6 +708,11 @@ void handleStartCv(JsonDocument &cmd) {
     done["readUs"] = st.maxReadUs;
     float meanS = st.meanPeriodS();
     if (meanS > 0.0f) done["achievedScanRate_mVs"] = stepMv / meanS;
+    // The same numbers as plain text: the bridge forwards the JSON to the app
+    // without printing it, and the app does not show them.
+    Serial.printf("[CV] timing: requested %.1f mV/s, achieved %.1f mV/s, read %u us, late %u of %u, worst lag %d us\n",
+                  scanRate, meanS > 0.0f ? stepMv / meanS : 0.0f, (unsigned)st.maxReadUs,
+                  (unsigned)st.late, (unsigned)st.n, (int)st.maxLagUs);
     sendJson(done);
   }
   {
@@ -933,6 +933,7 @@ void handleStartFet(JsonDocument &cmd) {
     done["outOfRangeCount"] = fetOutOfRangeCount;
     done["lateCount"] = lateTotal;
     done["maxLagUs"] = worstLag;
+    Serial.printf("[FET] timing: late %u, worst lag %d us\n", (unsigned)lateTotal, (int)worstLag);
     sendJson(done);
   }
   {
@@ -1122,6 +1123,9 @@ void handleStartSwv(JsonDocument &cmd) {
     done["readUs"] = st.maxReadUs;
     float meanS = st.meanPeriodS();  // time between consecutive half-pulse readings
     if (meanS > 0.0f) done["achievedFrequency_Hz"] = 1.0f / (2.0f * meanS);
+    Serial.printf("[SWV] timing: achieved %.1f Hz, read %u us, late %u of %u, worst lag %d us\n",
+                  meanS > 0.0f ? 1.0f / (2.0f * meanS) : 0.0f, (unsigned)st.maxReadUs,
+                  (unsigned)st.late, (unsigned)st.n, (int)st.maxLagUs);
     sendJson(done);
   }
   {
@@ -1168,6 +1172,28 @@ void dispatchCommand(const String &line) {
   }
 }
 
+// AD5940Start() only configures the ESP32's pins and SPI; it cannot tell
+// whether the AD5941 is there. This resets the chip and reads its fixed ADI
+// identifier (0x4144), so a wiring or power fault shows up at boot instead of
+// as a silent bad sweep. The result is only printed: the sweeps still run.
+static void checkAd5941() {
+  AD5940_HWReset();
+  AD5940_Initialize();
+  uint32_t adiid = AD5940_GetADIID();
+  uint32_t chipid = AD5940_GetChipID();
+  if (adiid == 0x4144) {
+    Serial.printf("[AD5941] ID OK (ADIID=0x%04X, CHIPID=0x%04X)\n",
+                  (unsigned)adiid, (unsigned)chipid);
+  } else {
+    Serial.printf("[AD5941] NOT FOUND (ADIID=0x%04X, expected 0x4144). ", (unsigned)adiid);
+    if (adiid == 0x0000 || adiid == 0xFFFF) {
+      Serial.println("All zeros or all ones usually means no SPI answer: check the AD5941 supply, RESET and CS wiring.");
+    } else {
+      Serial.println("A wrong value usually means a wrong SPI mode, clock or MISO/MOSI swap.");
+    }
+  }
+}
+
 // ── Arduino entry points ────────────────────────────────────────
 
 void setup() {
@@ -1177,6 +1203,7 @@ void setup() {
   Serial.println("ElectroStat firmware starting...");
   helpstat.setEisPointCallback(onEisPoint);
   helpstat.AD5940Start(); // AD5941 SPI/GPIO bring-up (from constants.h pins)
+  checkAd5941();
 
   // microSD backup (see the "microSD backup" comment above sendLine()).
   // CS_SD is defined in constants.h; the card shares the SPI bus with the
