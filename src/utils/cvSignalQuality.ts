@@ -1,4 +1,5 @@
 import type { CVMetrics } from "@/utils/computeCVMetrics";
+import { CV_DELTA_EP_REVERSIBLE_MV } from "@/utils/cvConstants";
 
 export type CVQualityLevel = "green" | "yellow" | "red" | "idle";
 
@@ -42,9 +43,9 @@ export function estimateCVStepMv(
  * The light answers "is this a trustworthy measurement?", so it uses the same
  * rule as the other techniques (all green -> green, any red -> red, otherwise
  * yellow) over the criteria that describe the measurement itself: both peaks
- * found, SNR, and scan resolution. A reversible peak pair is ~59/n mV wide, so
+ * found, SNR, and scan resolution. A reversible peak pair is ~57/n mV wide, so
  * the potential step must put enough points across that width to locate Ep
- * (the ΔEp resolution is one step); ≥10 points per 59/n mV is green, ≥5 yellow.
+ * (the ΔEp resolution is one step); ≥10 points per 57/n mV is green, ≥5 yellow.
  *
  * ΔEp, |Ipa/Ipc|, the reversibility class and D apparent describe the redox
  * system (rate constant, follow-up chemistry), not the measurement, so they
@@ -74,7 +75,7 @@ export function computeCVSignalQuality(
 
   let resolutionLevel: CVQualityLevel = "idle";
   if (opts.stepMv != null && opts.stepMv > 0) {
-    const pointsPerFeature = 59.16 / Math.max(1, opts.n ?? 1) / opts.stepMv;
+    const pointsPerFeature = CV_DELTA_EP_REVERSIBLE_MV / Math.max(1, opts.n ?? 1) / opts.stepMv;
     resolutionLevel =
       pointsPerFeature >= 10 ? "green" : pointsPerFeature >= 5 ? "yellow" : "red";
   }

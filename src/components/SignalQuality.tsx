@@ -489,7 +489,7 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             />
             <MetricRow
               label="Scan Resolution"
-              title={`Potential step between points. A reversible peak pair is about 59/n mV wide (n=${cvNElectrons}), so the step sets how precisely Ep and ΔEp can be located. ≥10 points across that width green, ≥5 yellow, fewer red.`}
+              title={`Potential step between points. A reversible peak pair is about 57/n mV wide (n=${cvNElectrons}), so the step sets how precisely Ep and ΔEp can be located. ≥10 points across that width green, ≥5 yellow, fewer red.`}
               value={cvStepMv != null ? `${cvStepMv.toFixed(cvStepMv < 10 ? 1 : 0)} mV step` : "—"}
               level={cvLevels.resolutionLevel}
             />

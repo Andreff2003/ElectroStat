@@ -4,6 +4,7 @@ import {
   CV_R,
   CV_T_DEFAULT_K,
   CV_RS_PREFACTOR,
+  CV_DELTA_EP_REVERSIBLE_MV,
 } from "@/utils/cvConstants";
 
 export type CVReversibility = "reversible" | "quasi-reversible" | "irreversible";
@@ -43,7 +44,7 @@ export interface CVMetrics {
   deltaEp: number;          // mV
   IpaIpcRatio: number;      // |Ipa/Ipc|
   // Derived parameters — NaN when not physically valid
-  n_electrons: number;      // from 59.16 / ΔEp, only valid for reversible @25°C
+  n_electrons: number;      // from CV_DELTA_EP_REVERSIBLE_MV (≈57 mV) / ΔEp, only valid for reversible @25°C
   n_est_valid: boolean;
   D_apparent: number;       // cm²/s
   D_valid: boolean;
@@ -443,7 +444,7 @@ export function computeCVMetrics(
   }
 
   // Reversibility — compare to expected ΔEp for n electrons at 25 °C.
-  const expectedDeltaEp = 59.16 / Math.max(1, input.n);
+  const expectedDeltaEp = CV_DELTA_EP_REVERSIBLE_MV / Math.max(1, input.n);
   let reversibility: CVReversibility;
   if (!hasAnodic || !hasCathodic) {
     reversibility = "irreversible";
@@ -492,7 +493,7 @@ export function computeCVMetrics(
     IpaIpcRatio >= 0.9 &&
     IpaIpcRatio <= 1.1
   ) {
-    n_electrons = 59.16 / deltaEp;
+    n_electrons = CV_DELTA_EP_REVERSIBLE_MV / deltaEp;
     n_est_valid = true;
   }
 

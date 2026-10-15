@@ -8,7 +8,7 @@ import type { SWVParameters } from "@/types/swv";
  * The SWV analogue of the CV checks: expected-vs-recovered values for the
  * default reversible probe (thesis Table 12) and the scan-step resolution
  * criterion (points across the half-peak width: >=10 green, >=5 yellow).
- * SWV peaks are ~100 mV wide at half height (CV pairs span 59 mV), so a
+ * SWV peaks are ~100 mV wide at half height (CV pairs span 57 mV), so a
  * coarser step is needed before the resolution degrades.
  */
 const P = {

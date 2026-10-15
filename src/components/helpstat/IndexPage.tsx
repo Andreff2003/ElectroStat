@@ -113,6 +113,7 @@ import type { EISDataPoint } from "@/hooks/useSimulatedData";
 import { type DemoPhase, PHASE_ORDER, PHASE_LABEL } from "@/components/helpstat/demoPhases";
 import DashboardHeader from "@/components/helpstat/DashboardHeader";
 import HomeView from "@/components/helpstat/HomeView";
+import { CV_DELTA_EP_REVERSIBLE_MV } from "@/utils/cvConstants";
 import {
   OVERLAY_COLORS,
   importOverlayCsv,
@@ -2988,7 +2989,7 @@ const Index = () => {
                       { label: "Ipc corr", value: Number.isFinite(cvMetrics.IpcCorrected) ? `${cvMetrics.IpcCorrected.toFixed(2)} µA` : "—", t: "Baseline-corrected cathodic peak" },
                       { label: "Epa", value: Number.isFinite(cvMetrics.Epa) ? `${cvMetrics.Epa.toFixed(3)} V` : "—", t: "Anodic peak potential — where oxidation current peaks." },
                       { label: "Epc", value: Number.isFinite(cvMetrics.Epc) ? `${cvMetrics.Epc.toFixed(3)} V` : "—", t: "Cathodic peak potential — where reduction current peaks." },
-                      { label: "ΔEp", value: Number.isFinite(cvMetrics.deltaEp) ? `${cvMetrics.deltaEp.toFixed(0)} mV` : "—", t: `Expected ≈ ${(59.16 / Math.max(1, cvParams.n)).toFixed(0)} mV for n=${cvParams.n} at 25 °C` },
+                      { label: "ΔEp", value: Number.isFinite(cvMetrics.deltaEp) ? `${cvMetrics.deltaEp.toFixed(0)} mV` : "—", t: `Expected ≈ ${(CV_DELTA_EP_REVERSIBLE_MV / Math.max(1, cvParams.n)).toFixed(0)} mV for n=${cvParams.n} at 25 °C` },
                       { label: "E°'", value: Number.isFinite(cvMetrics.E0prime) ? `${cvMetrics.E0prime.toFixed(3)} V` : "—", t: "Formal potential, ≈ midpoint between Epa and Epc." },
                       { label: "|Ipa/Ipc|", value: Number.isFinite(cvMetrics.IpaIpcRatio) ? cvMetrics.IpaIpcRatio.toFixed(2) : "—", t: "Peak current ratio. Near 1.0 = reversible couple." },
                       { label: "n est.", value: cvMetrics.n_est_valid ? cvMetrics.n_electrons.toFixed(2) : "—", t: "Valid only for reversible diffusion-controlled systems at 25 °C." },

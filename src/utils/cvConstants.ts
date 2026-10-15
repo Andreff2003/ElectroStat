@@ -12,6 +12,18 @@ export const CV_T_DEFAULT_K = 298.15;     // K (25 °C)
 export const CV_DEFAULT_D_CM2_S = 7.26e-6; // cm²/s — Fe(CN)6³⁻/⁴⁻ in aqueous KCl
 export const CV_E0_PRIME_DEFAULT_V = 0.22; // V — Fe(CN)6³⁻/⁴⁻ formal potential
 
+/**
+ * Peak-to-peak separation ΔEp of a reversible, diffusion-controlled
+ * one-electron couple at 25 °C: 2.218·RT/F ≈ 57 mV, and 57/n mV for n
+ * electrons (Nicholson & Shain 1964; Elgrishi et al., J. Chem. Educ. 2018,
+ * 95, 197–206).
+ *
+ * This is NOT the Nernst slope. 2.303·RT/F = 59.16 mV is the potential change
+ * per decade of concentration ratio, a different quantity that must not be
+ * used as the expected ΔEp.
+ */
+export const CV_DELTA_EP_REVERSIBLE_MV = (2.218 * 1000 * CV_R * CV_T_DEFAULT_K) / CV_F; // ≈ 56.99 mV
+
 /** Randles–Ševčík prefactor at 25 °C (0.4463 · F · sqrt(F/RT)) ≈ 268648.45 */
 export const CV_RS_PREFACTOR =
   0.4463 * CV_F * Math.sqrt(CV_F / (CV_R * CV_T_DEFAULT_K));

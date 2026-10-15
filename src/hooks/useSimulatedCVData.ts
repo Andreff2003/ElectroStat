@@ -171,7 +171,7 @@ function buildPotentialProgram(params: CVSimParams): { segs: Seg[]; dt: number; 
  * Reversible model — delegates to the physical 1-D semi-infinite
  * diffusion solver with a Nernstian surface boundary condition.
  * No Gaussian shaping, no capacitive baseline: this is a real PDE
- * solve (backward Euler + Thomas tridiagonal), so ΔEp ≈ 59/n mV,
+ * solve (backward Euler + Thomas tridiagonal), so ΔEp ≈ 57/n mV,
  * |Ipa/Ipc| ≈ 1 and ip ∝ C·√v emerge from the physics.
  */
 function buildReversibleCV(params: CVSimParams): CVDataPoint[] {

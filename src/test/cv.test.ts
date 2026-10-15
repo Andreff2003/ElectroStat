@@ -19,7 +19,7 @@ import {
 import { buildCVExportText } from "@/utils/csvExport";
 import { computeCVSignalQuality, estimateCVStepMv } from "@/utils/cvSignalQuality";
 import { simulateReversibleDiffusionCV } from "@/utils/cvDiffusionSolver";
-import { CV_F, CV_R, CV_T_DEFAULT_K } from "@/utils/cvConstants";
+import { CV_F, CV_R, CV_T_DEFAULT_K, CV_DELTA_EP_REVERSIBLE_MV } from "@/utils/cvConstants";
 
 /**
  * Synthetic Nernstian-shape voltammogram with two Gaussian peaks.
@@ -99,7 +99,7 @@ describe("CV constants", () => {
 });
 
 describe("computeCVMetrics — reversible defaults", () => {
-  it("strict default: 2 peaks, ΔEp≈59 mV, ratio≈1, D_status=valid, SNR>10", () => {
+  it("strict default: 2 peaks, ΔEp≈57 mV, ratio≈1, D_status=valid, SNR>10", () => {
     const data = makeReversibleCurve({ cMM: 5, ipUA: 80 });
     const m = computeCVMetrics(data, { scanRate_mVs: 100, n: 1, cMM: 5, areaCm2: 0.0707 });
     expect(m).not.toBeNull();
@@ -144,7 +144,7 @@ describe("computeCVMetrics — quasi-reversible D_status", () => {
     }
   });
 
-  it("synthetic stretched ΔEp ≫ 59 mV → not validated", () => {
+  it("synthetic stretched ΔEp ≫ 57 mV → not validated", () => {
     const Epc = 0.22 - 0.10;
     const Epa = 0.22 + 0.10;
     const sigma = 0.05;
@@ -524,7 +524,7 @@ describe("simulateReversibleDiffusionCV — physical solver", () => {
     expect(Ipc).toBeLessThan(0);
   });
 
-  it("ΔEp is close to 59 mV for n=1 (50–75 mV window)", () => {
+  it("ΔEp is close to 57 mV for n=1 (50–75 mV window)", () => {
     const pts = simulateReversibleDiffusionCV(SOLVER_DEFAULTS);
     const { Epa, Epc } = peakStats(pts);
     const dEp = Math.abs(Epa - Epc) * 1000;
@@ -611,6 +611,19 @@ describe("CV simulator accuracy against theory (5 mM, 0.0707 cm², 100 mV/s, n=1
     const m = metricsFor(pts);
     expect(Math.abs(Math.abs(m.IpcCorrected) / ipRandlesSevcikUA - 1)).toBeLessThan(0.015);
     expect(Math.abs(m.deltaEp - 57)).toBeLessThanOrEqual(4);
+  });
+
+  it("the expected ΔEp is 2.218·RT/F ≈ 57 mV, not the 59.16 mV Nernst slope", () => {
+    expect(CV_DELTA_EP_REVERSIBLE_MV).toBeCloseTo((2.218 * 1000 * CV_R * CV_T_DEFAULT_K) / CV_F, 6);
+    expect(CV_DELTA_EP_REVERSIBLE_MV).toBeGreaterThan(56.5);
+    expect(CV_DELTA_EP_REVERSIBLE_MV).toBeLessThan(57.5);
+    expect(59.16 - CV_DELTA_EP_REVERSIBLE_MV).toBeGreaterThan(2);
+  });
+
+  it("the electron count estimated from ΔEp is within 5 % of 1 for the reversible sweep", () => {
+    const m = metricsFor(buildCVPointsForTest({ ...DEFAULT_CV_PARAMS, cvModel: "reversible" }));
+    expect(m.n_est_valid).toBe(true);
+    expect(Math.abs(m.n_electrons - 1)).toBeLessThan(0.05);
   });
 
   it("D apparent recovers the input D within 2 % using the first-sweep peak", () => {
