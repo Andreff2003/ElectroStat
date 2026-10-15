@@ -33,7 +33,9 @@ export default function ConnectionPanel({
   multiConnectedCount = 0,
   multiEnabledCount = 0,
 }: ConnectionPanelProps) {
-  const [wsUrl, setWsUrl] = useState("ws://192.168.4.1:81");
+  // The browser talks to bridge.py, which listens on 127.0.0.1:81 and relays to the
+  // ESP32 over USB serial or WiFi. The board itself serves no WebSocket.
+  const [wsUrl, setWsUrl] = useState("ws://127.0.0.1:81");
 
   const statusColor: Record<ConnectionStatus, string> = {
     disconnected: "bg-muted-foreground",
@@ -100,7 +102,7 @@ export default function ConnectionPanel({
             <Input
               value={wsUrl}
               onChange={(e) => setWsUrl(e.target.value)}
-              placeholder="ws://192.168.4.1:81"
+              placeholder="ws://127.0.0.1:81"
               className="font-mono text-xs h-8 bg-secondary"
               disabled={connectionStatus === "connected" || connectionStatus === "connecting"}
             />
@@ -131,8 +133,8 @@ export default function ConnectionPanel({
 
           {connectionStatus === "disconnected" && (
             <p className="text-[10px] text-muted-foreground font-mono leading-relaxed">
-              Enter the WebSocket URL of your ESP32-S3. Default AP mode address is ws://192.168.4.1:81.
-              If connected to your WiFi network, use the ESP32's local IP.
+              Enter the address of bridge.py, which prints it on startup (normally ws://127.0.0.1:81).
+              The bridge relays to the ESP32-S3 over USB or WiFi, so keep it running on this computer.
             </p>
           )}
         </div>
