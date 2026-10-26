@@ -459,6 +459,66 @@ struct AfeOffGuard {
   ~AfeOffGuard() { off(); }
 };
 
+// ── Calibration at the start of a CV, SWV or BioFET run ──────────────────
+// The current of these techniques is the HSTIA output over its RTIA, and the AD5941
+// gives neither exactly (see estat::AmperometryCalResult in ElectroStat_Timing.h).
+// At the start of every run the firmware measures the ADC gain and offset, the real
+// RTIA against RCAL, the reading with the cell disconnected, the real Vzero and the
+// potential offset, and corrects for them. It needs RCAL mounted, as EIS does: without
+// it, or if the measurement is implausible (RTIA more than 30 % from nominal), the
+// nominal RTIA is used, with a warning, and the run goes on. The app can switch the
+// whole thing off with "calibrate": false in the start command.
+static estat::AmperometryCalResult gCal;   // of the run in progress
+
+static void printCalibration(const estat::AmperometryCalResult &c, bool eConvention) {
+  if (!c.attempted) {
+    Serial.printf("[CAL] calibration switched off, nominal RTIA %.0f ohm\n", c.rtiaNominalOhms);
+    return;
+  }
+  const float pot = eConvention ? c.potentialOffsetMv : c.biasOffsetMv;
+  Serial.printf("[CAL] RTIA nominal %.0f, calibrated %.0f ohm%s; current offset %.2f uA; potential offset %.1f mV\n",
+                c.rtiaNominalOhms, c.rtiaOhms, c.rtiaCalibrated ? "" : " (nominal used, not calibrated)",
+                c.currentOffsetUa, pot);
+  Serial.printf("[CAL] PGA %s, LPDAC %s (Vzero %.3f V), potential %s, zero current %s\n",
+                c.pgaCalibrated ? "calibrated" : "not calibrated",
+                c.lpdacCalibrated ? "calibrated" : "nominal", c.vzeroV,
+                c.potentialMeasured ? "corrected" : "not corrected",
+                c.zeroMeasured ? "subtracted" : "not subtracted");
+  if (c.note[0]) Serial.printf("[CAL] WARNING: %s\n", c.note);
+}
+
+// Sets the AFE up for a run, with the calibration unless the command turns it off.
+// rtiaOhms goes in as the nominal RTIA of the sweep and comes out as the one to
+// convert with (calibrated, or nominal when it could not be calibrated).
+// startBiasMv is the LPDAC bias at the start potential. eConvention says whether the
+// potential offset is reported as E of WE vs RE (CV, SWV) or as the bias (BioFET).
+static void startAmperometry(JsonDocument &cmd, uint32_t rtiaSel, float *rtiaOhms, float startBiasMv, bool eConvention) {
+  const float nominal = *rtiaOhms;
+  gCal = estat::AmperometryCalResult();
+  gCal.rtiaNominalOhms = nominal;
+  gCal.rtiaOhms = nominal;
+  if (cmd["calibrate"] | true) {
+    helpstat.AD5940_AmperometrySetupCalibrated(rtiaSel, nominal, RCAL_OHMS, startBiasMv, &gCal);
+    *rtiaOhms = gCal.rtiaOhms;
+  } else {
+    helpstat.AD5940_AmperometrySetup(rtiaSel);
+  }
+  printCalibration(gCal, eConvention);
+}
+
+// What the calibration found, for the "running" status message of the sweep (new fields,
+// the existing ones are untouched).
+static void addCalibrationFields(JsonDocument &status, bool eConvention) {
+  status["calibrated"] = gCal.attempted;
+  status["rtiaNominalOhms"] = gCal.rtiaNominalOhms;
+  status["rtiaCalibratedOhms"] = gCal.rtiaOhms;
+  status["rtiaCalibrated"] = gCal.rtiaCalibrated;
+  status["currentOffsetUa"] = gCal.currentOffsetUa;
+  status["potentialOffsetMv"] = eConvention ? gCal.potentialOffsetMv : gCal.biasOffsetMv;
+  status["vzeroV"] = gCal.vzeroV;
+  if (gCal.note[0]) status["calibrationNote"] = gCal.note;
+}
+
 static void sendSweepError(const char *type, const char *message) {
   JsonDocument err;
   err["type"] = type;
@@ -780,7 +840,10 @@ void handleStartCv(JsonDocument &cmd) {
 
   // Plan the schedule before announcing "running": measure how long one read
   // takes on this board and check that a step's slot can hold it.
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(cvRtiaOhms));
+  const uint32_t calStartMs = millis();
+  startAmperometry(cmd, rtiaOhmsToSel(cvRtiaOhms), &cvRtiaOhms,
+                   estat::lpdacBiasMvFromE(eStart * 1000.0f), /*eConvention=*/true);
+  const float calElapsedS = (float)(millis() - calStartMs) / 1000.0f;   // counts as part of the quiet time
   AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(eStart * 1000.0f), cvRtiaOhms);
   if (readUs == 0) {
@@ -808,13 +871,16 @@ void handleStartCv(JsonDocument &cmd) {
     JsonDocument status;
     status["type"] = "cv_status";
     status["status"] = "running";
+    addCalibrationFields(status, /*eConvention=*/true);
     sendJson(status);
   }
 
   // Hold the start potential for the quiet time, so the solution settles at it.
   helpstat.AD5940_AmperometrySetBias(estat::lpdacBiasMvFromE(eStart * 1000.0f));
-  if (quietTime > 0) {
-    waitUntilUs(micros() + (uint32_t)(min(quietTime, 60.0f) * 1.0e6f));
+  // The calibration at the start of the run took part of the quiet time already.
+  const float quietLeft = min(quietTime, 60.0f) - calElapsedS;
+  if (quietLeft > 0) {
+    waitUntilUs(micros() + (uint32_t)(quietLeft * 1.0e6f));
   }
 
   float stepV = stepMv / 1000.0f;
@@ -979,7 +1045,7 @@ void handleStartFet(JsonDocument &cmd) {
   // electrode and the channel on SE0, the native sign is Vgs, so it is kept.
   // Decide this again, and add the conversion here if needed, when a device
   // is wired.
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(fetRtiaOhms));
+  startAmperometry(cmd, rtiaOhmsToSel(fetRtiaOhms), &fetRtiaOhms, vgMin * 1000.0f, /*eConvention=*/false);
   AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(vgMin * 1000.0f, fetRtiaOhms);
   if (readUs == 0) {
@@ -1015,6 +1081,7 @@ void handleStartFet(JsonDocument &cmd) {
     JsonDocument status;
     status["type"] = "fet_status";
     status["status"] = "running";
+    addCalibrationFields(status, /*eConvention=*/false);
     sendJson(status);
   }
 
@@ -1194,7 +1261,10 @@ void handleStartSwv(JsonDocument &cmd) {
   }
 
   // Plan the schedule before announcing "running" (see handleStartCv).
-  helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(swvRtiaOhms));
+  const uint32_t calStartMs = millis();
+  startAmperometry(cmd, rtiaOhmsToSel(swvRtiaOhms), &swvRtiaOhms,
+                   estat::lpdacBiasMvFromE(startE * 1000.0f), /*eConvention=*/true);
+  const float calElapsedS = (float)(millis() - calStartMs) / 1000.0f;   // counts as part of the quiet time
   AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(startE * 1000.0f), swvRtiaOhms);
   if (readUs == 0) {
@@ -1222,13 +1292,16 @@ void handleStartSwv(JsonDocument &cmd) {
     JsonDocument status;
     status["type"] = "swv_status";
     status["status"] = "running";
+    addCalibrationFields(status, /*eConvention=*/true);
     sendJson(status);
   }
 
   // Hold the start potential for the quiet time, so the solution settles at it.
   helpstat.AD5940_AmperometrySetBias(estat::lpdacBiasMvFromE(startE * 1000.0f));
-  if (quietTimeS > 0) {
-    waitUntilUs(micros() + (uint32_t)(min(quietTimeS, 60.0f) * 1.0e6f));
+  // The calibration at the start of the run took part of the quiet time already.
+  const float quietLeft = min(quietTimeS, 60.0f) - calElapsedS;
+  if (quietLeft > 0) {
+    waitUntilUs(micros() + (uint32_t)(quietLeft * 1.0e6f));
   }
 
   float stepV = stepMv / 1000.0f;

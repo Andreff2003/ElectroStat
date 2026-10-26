@@ -44,6 +44,9 @@
 // Levenberg-Marquardt Functionality
 #include "lma.h"
 
+// ElectroStat addition: the arithmetic and the result type of the calibration of the amperometric path
+#include "ElectroStat_Timing.h"
+
 // BLE
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -264,6 +267,17 @@ class HELPStat {
         bool _aborted = false;
         int _currentRtiaSel = -1; // HSTIA RTIA selector set by setHSTIA() for the point in progress
 
+        /* ElectroStat addition — state of the amperometric path (CV, SWV, BioFET). The defaults
+           are the nominal behavior, so nothing changes unless the calibration ran. */
+        bool _skipAfeReset = false;       // AD5940_TDDNoise() skips HWReset and Initialize (they would erase the calibration)
+        float _currentZeroVolt = 0.0f;           // reading with the cell disconnected, subtracted from every reading
+        float _vzeroV = estat::kVzeroNominalV; // real Vzero, for the out-of-range window
+        float _biasOffsetMv = 0.0f;       // measured potential offset, subtracted from every bias
+        bool _lpdacCalValid = false;      // the LPDAC transfer functions were measured
+        float _lpdacK12 = 0.0f, _lpdacB12 = 0.0f; // 12-bit code to mV: V = k * code + b
+        bool measureAdcVolt(uint32_t muxP, uint32_t muxN, int samples, float *volts);
+        void restoreAmperometrySwitches(void);
+
         class MyServerCallbacks: public BLEServerCallbacks { // BLE Callback (just says "Device Connected" or "Device Disconnected")
             void onConnect(BLEServer* pServer) {
                 bool deviceConnected = true;
@@ -481,8 +495,8 @@ class HELPStat {
          *  that case. This does NOT change rtiaOhms automatically; the
          *  caller (or the operator, via the app's RTIA Gain selector) picks
          *  a different gain and re-runs. ASSUMPTION, UNTESTED against real
-         *  hardware: HSTIA_N is tied to the fixed ~1.1V Vzero mid-scale bias
-         *  this function always uses (see LPDACSW_VZERO2HSTIA below), so the
+         *  hardware: HSTIA_N is tied to Vzero, which is 1.3 V (the 6-bit code 32 gives
+         *  0.2 V + 32 * 34.375 mV, not 1.1 V) or the measured value after the calibration (see LPDACSW_VZERO2HSTIA below), so the
          *  absolute HSTIA output voltage is Vzero + the measured
          *  differential reading. */
         /** Applies the bias and returns immediately (no wait, no read). */
@@ -505,6 +519,27 @@ class HELPStat {
            end of an EIS sweep. The next AD5940_AmperometrySetup() resets and
            initializes the AFE again, so nothing else is needed to start the next run. */
         void AD5940_AmperometryShutDown(void);
+
+        /* ElectroStat addition — AD5940_AmperometrySetup() plus the calibration of the
+           path, for the start of a CV, SWV or BioFET run (call it instead of the plain
+           setup; the plain one keeps the nominal behavior). It resets and initializes
+           the AFE, then, each step guarded and never fatal:
+             1. calibrates the ADC PGA 1 (offset and gain) with AD5940_ADCPGACal;
+             2. measures the HSTIA's RTIA against RCAL (AD5940_HSRtiaCal, at 120 Hz) and
+                believes it only within estat::kRtiaMaxDeviation of the nominal value;
+             3. brings the AFE up as the plain setup does (without a second reset, which
+                would erase 1) and sets the RTIA gain;
+             4. measures the LPDAC code to voltage transfer functions (AD5940_LPDACCal), so
+                that Vzero and the bias code are the real ones, not the nominal 1.1 V;
+             5. applies startBiasMv and measures V(RE0) - V(SE0), to correct the bias for
+                the offset of the potentiostat (only when it is plausible);
+             6. measures the reading with the cell disconnected (SE0 opened), to subtract.
+           rcalOhms is the value of the calibration resistor. If it is not a resistor
+           value, or the RTIA measured against it is more than 30 % from nominal, the nominal
+           RTIA is used. AD5940_AmperometrySetBias() and AD5940_AmperometryRead() then apply
+           the corrections themselves. The result (and what failed, in note) is in *res. */
+        void AD5940_AmperometrySetupCalibrated(uint32_t hstiaRtiaSel, float rtiaNominalOhms, float rcalOhms,
+                                               float startBiasMv, estat::AmperometryCalResult *res);
 };
 
 #endif

@@ -3,6 +3,7 @@
 #include <limits>
 #include "Arduino.h"
 #include "SD.h"
+#include "ElectroStat_Timing.h"
 #define HSTIARTIA_200 1
 #define HSTIARTIA_1K 2
 #define HSTIARTIA_5K 3
@@ -35,6 +36,14 @@ extern bool g_afe_on;
 extern int g_afe_off_calls;
 extern int g_afe_misuse;       // a bias set or a read done while the AFE was off
 extern uint64_t g_afe_off_at;  // virtual time of the last shutdown
+// Calibration stand-in: what AD5940_AmperometrySetupCalibrated() reports (a script), how long it takes, and what it was called with.
+extern estat::AmperometryCalResult g_cal_script;
+extern uint32_t g_cal_us;
+extern int g_cal_calls;
+extern int g_plain_setup_calls;
+extern float g_cal_rcal;
+extern float g_cal_start_bias;
+extern float g_last_rtia;
 
 // The AD5941 identification registers; the real ones come from ad5940.h.
 inline void AD5940_HWReset() {}
@@ -73,11 +82,17 @@ class HELPStat {
   EisPointCallback _onPoint = nullptr;
   EisAbortCheck _abortCheck = nullptr;
   bool _aborted = false;
-  void AD5940_AmperometrySetup(uint32_t) { sim_advance(20000); g_afe_on = true; }
+  void AD5940_AmperometrySetup(uint32_t) { sim_advance(20000); g_afe_on = true; g_plain_setup_calls++; }
+  void AD5940_AmperometrySetupCalibrated(uint32_t, float rtiaNominal, float rcal, float startBias, estat::AmperometryCalResult *res) {
+    sim_advance(g_cal_us); g_afe_on = true; g_cal_calls++; g_cal_rcal = rcal; g_cal_start_bias = startBias;
+    *res = g_cal_script; res->attempted = true; res->rtiaNominalOhms = rtiaNominal;
+    if (!res->rtiaCalibrated) res->rtiaOhms = rtiaNominal;
+  }
   void AD5940_AmperometryShutDown() { sim_advance(300); g_afe_on = false; g_afe_off_calls++; g_afe_off_at = g_clock_us; }
   void AD5940_AmperometrySetBias(float mv) { if (!g_afe_on) g_afe_misuse++; sim_advance(g_spi_us); g_biasMv = mv; }
   float AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange = nullptr) {
     if (!g_afe_on) g_afe_misuse++;
+    g_last_rtia = rtiaOhms;
     sim_advance(g_read_us);
     g_reads.push_back({micros(), g_biasMv});
     if (outOfRange) *outOfRange = false;

@@ -117,6 +117,74 @@ int main() {
     for (float e = -1100.0f; e <= 1100.0f; e += 37.0f) CHECK(lpdacBiasMvFromE(lpdacBiasMvFromE(e)) == e);
   }
 
+  // -- calibration of the amperometric path: the arithmetic --
+  {
+    auto near = [](float a, float b, float tol = 1e-3f) { return std::fabs(a - b) <= tol; };
+
+    // the RTIA: believed within 30 % of nominal, not beyond, never when it is not a number
+    CHECK(rtiaPlausible(12300.0f, 10000.0f));      // the dummy cell: 23 % high
+    CHECK(rtiaPlausible(7000.0f, 10000.0f));       // exactly 30 % low is still accepted
+    CHECK(!rtiaPlausible(6900.0f, 10000.0f));
+    CHECK(!rtiaPlausible(14000.0f, 10000.0f));     // a missing RCAL gives a wrong value
+    CHECK(!rtiaPlausible(0.0f, 10000.0f) && !rtiaPlausible(NAN, 10000.0f) && !rtiaPlausible(-5.0f, 10000.0f));
+
+    // offset subtraction: the reading with the cell disconnected is taken off every reading
+    CHECK(near(amperometryCurrentUa(-0.027f, -0.027f, 10000.0f), 0.0f));       // no current: zero, whatever the offset
+    CHECK(near(amperometryCurrentUa(0.100f, -0.027f, 10000.0f), 12.7f));
+    CHECK(near(amperometryCurrentUa(0.100f, 0.0f, 10000.0f), 10.0f));           // nothing measured, nothing subtracted
+    // the constant -2.7 uA of the dummy cell on a 10 kOhm RTIA is -27 mV, and goes away
+    CHECK(near(amperometryCurrentUa(-0.027f, 0.0f, 10000.0f), -2.7f));
+
+    // calibrated RTIA: a real RTIA of 12.3 kOhm and a current of 100 uA give 1.23 V. With the nominal
+    // 10 kOhm that reads 123 uA (23 % high, as on the 10 kOhm resistor); with the calibrated one, 100 uA.
+    CHECK(near(amperometryCurrentUa(1.23f, 0.0f, 10000.0f), 123.0f));
+    CHECK(near(amperometryCurrentUa(1.23f, 0.0f, 12300.0f), 100.0f, 1e-2f));
+
+    // Vzero: 0.2 V + 32 * 34.375 mV = 1.3 V, not 1.1 V, and the window follows it
+    CHECK(near(vzeroFromTransferV(200.0f, 34.375f, 32), 1.3f));
+    CHECK(near(kVzeroNominalV, 1.3f));
+    CHECK(!hstiaOutOfWindow(1.3f, 0.75f));         // 2.05 V is inside
+    CHECK(hstiaOutOfWindow(1.3f, 0.85f));          // 2.15 V is out; with Vzero = 1.1 V it looked like 1.95 V, inside
+    CHECK(!hstiaOutOfWindow(1.1f, 0.85f));         // the old assumption
+    CHECK(!hstiaOutOfWindow(1.3f, -1.05f));        // 0.25 V
+    CHECK(hstiaOutOfWindow(1.3f, -1.15f));         // 0.15 V
+
+    // the 12-bit code from a measured transfer function: the nominal one gives 2048 for a bias of 0
+    CHECK(std::abs(lpdacCode12(1.3f, 0.0f, 2200.0f / 4095.0f, 200.0f) - 2048) <= 1);    // 2047.5 exactly: the library formula truncates to 2047
+    CHECK(std::abs(lpdacCode12(1.3f, 100.0f, 2200.0f / 4095.0f, 200.0f) - 2234) <= 1);
+    CHECK(lpdacCode12(1.3f, -1100.0f, 2200.0f / 4095.0f, 200.0f) == 0);                   // Vbias = 0.2 V is code 0
+    CHECK(lpdacCode12(1.3f, 5000.0f, 0.5371f, 200.0f) == 4095);   // clamped to the 12 bits
+    CHECK(lpdacCode12(1.3f, -5000.0f, 0.5371f, 200.0f) == 0);
+    // a DAC with an offset of 20 mV and a gain 2 % low gets a different code for the same bias
+    {
+      const int nominal = lpdacCode12(1.3f, 0.0f, 0.5371f, 200.0f);
+      const int real = lpdacCode12(1.3f, 0.0f, 0.5371f * 0.98f, 180.0f);
+      CHECK(real != nominal && std::abs(real - nominal) < 100);
+    }
+
+    // potential correction: V(RE0) - V(SE0) read 45 mV too high -> an offset of 45 mV, and the bias is
+    // lowered by it, so that what reaches the cell is what was asked for
+    CHECK(near(biasOffsetMvFrom(1.345f, 1.300f, 0.0f), 45.0f, 0.01f));
+    CHECK(near(biasOffsetMvFrom(1.445f, 1.300f, 100.0f), 45.0f, 0.01f));    // at a bias of +100 mV
+    CHECK(near(biasOffsetMvFrom(1.300f, 1.300f, 0.0f), 0.0f, 0.01f));
+    CHECK(near(correctedBiasMv(-600.0f, 45.0f), -645.0f));
+    CHECK(near(correctedBiasMv(-600.0f, 0.0f), -600.0f));                   // no calibration, no change
+    {
+      const float asked = -600.0f, offset = 45.0f;
+      const float applied = correctedBiasMv(asked, offset);
+      CHECK(near(applied + offset, asked));                                // the cell gets what was asked
+    }
+    CHECK(near(correctedBiasMv(-1100.0f, 45.0f), -1100.0f));               // never beyond the +-1100 mV
+    CHECK(near(correctedBiasMv(1100.0f, -45.0f), 1100.0f));
+    CHECK(potentialOffsetPlausible(149.0f) && potentialOffsetPlausible(-149.0f));
+    CHECK(!potentialOffsetPlausible(151.0f) && !potentialOffsetPlausible(NAN));   // no cell: RE0 floats
+
+    // the result type starts as "nothing was calibrated"
+    AmperometryCalResult r;
+    CHECK(!r.attempted && !r.rtiaCalibrated && !r.zeroMeasured && !r.potentialMeasured && r.note[0] == 0);
+    CHECK(near(r.vzeroV, 1.3f));
+  }
+
   // -- statistics --
   {
     SweepStats st;

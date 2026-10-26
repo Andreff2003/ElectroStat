@@ -31,6 +31,34 @@ bool g_afe_on = false;
 int g_afe_off_calls = 0;
 int g_afe_misuse = 0;
 uint64_t g_afe_off_at = 0;
+estat::AmperometryCalResult g_cal_script;
+uint32_t g_cal_us = 1200000;
+int g_cal_calls = 0;
+int g_plain_setup_calls = 0;
+float g_cal_rcal = 0;
+float g_cal_start_bias = 0;
+float g_last_rtia = 0;
+// What a calibration that worked reports on the dummy cell: RTIA 23 % high, -2.7 uA of offset, 45 mV of potential offset.
+static void setCalDefaults() {
+  g_cal_script = estat::AmperometryCalResult();
+  g_cal_script.pgaCalibrated = true;
+  g_cal_script.rtiaCalibrated = true;
+  g_cal_script.rtiaOhms = 12300.0f;
+  g_cal_script.zeroMeasured = true;
+  g_cal_script.zeroVolt = -0.027f;
+  g_cal_script.currentOffsetUa = -2.7f;
+  g_cal_script.lpdacCalibrated = true;
+  g_cal_script.vzeroV = 1.3f;
+  g_cal_script.potentialMeasured = true;
+  g_cal_script.biasOffsetMv = -45.0f;
+  g_cal_script.potentialOffsetMv = 45.0f;
+  g_cal_us = 1200000;
+  g_cal_calls = 0;
+  g_plain_setup_calls = 0;
+  g_cal_rcal = 0;
+  g_cal_start_bias = 0;
+  g_last_rtia = 0;
+}
 
 void sim_advance(uint64_t us) { g_clock_us += us; }
 void SerialClass::println(const String &str) { sim_advance((uint64_t)usPerByte * (str.length() + 2)); }
@@ -90,6 +118,7 @@ static void reset(uint32_t epoch = 0, uint32_t serialUsPerByte = 0, uint32_t jit
   g_afe_on = false;
   g_afe_off_calls = 0;
   g_afe_misuse = 0;
+  setCalDefaults();
 }
 
 struct Msg {
@@ -185,6 +214,7 @@ int main() {
 
   std::printf("T5  stop received over WiFi 3 s into a CV\n");
   reset();
+  g_cal_us = 0;   // the timing tests measure the sweep, not the calibration at its start
   tcpClient.incoming.push_back({3000000u, "{\"command\":\"stop\"}"});
   run(CV_DEFAULT);
   {
@@ -241,6 +271,7 @@ int main() {
 
   std::printf("T8  BioFET: 51 transfer points at 200 ms, 121 time points at 0.5 s\n");
   reset();
+  g_cal_us = 0;   // the timing tests measure the sweep, not the calibration at its start
   run(FET_DEFAULT);
   {
     auto msgs = parse();
@@ -573,6 +604,113 @@ int main() {
   run(SWV_DEFAULT);                     // CV, then SWV, back to back: each sets the AFE up itself
   checkOff("SWV after a CV");
   CHECK(parse("swv_data").size() == 401);
+
+  // Calibration at the start of a CV, SWV or BioFET run: the current is converted with the calibrated
+  // RTIA, the measured offsets are reported, and nothing is fatal.
+  auto logHas = [](const char *needle) {
+    for (auto &l : g_logs) if (l.find(needle) != std::string::npos) return true;
+    return false;
+  };
+  auto running = [](const std::vector<Msg> &msgs, const char *type) -> const Msg * {
+    for (auto &m : msgs)
+      if (m.type == type && std::string((const char *)(m.doc["status"] | "")) == "running") return &m;
+    return nullptr;
+  };
+
+  std::printf("T21 CV starts with the calibration: calibrated RTIA, the values reported, RCAL passed\n");
+  reset();
+  run(CV_DEFAULT);
+  {
+    auto msgs = parse();
+    CHECK(g_cal_calls == 1 && g_plain_setup_calls == 0, "calibrated setup %d, plain %d", g_cal_calls, g_plain_setup_calls);
+    CHECK(g_cal_rcal == 10000.0f, "RCAL passed: %.1f", g_cal_rcal);
+    CHECK(std::fabs(g_cal_start_bias - (-600.0f)) < 1e-3, "start bias %.1f", g_cal_start_bias);   // E = 0.6 V is a bias of -600 mV
+    CHECK(g_last_rtia == 12300.0f, "the reads converted with RTIA %.0f", g_last_rtia);
+    CHECK(logHas("[CAL] RTIA nominal 10000, calibrated 12300 ohm; current offset -2.70 uA; potential offset 45.0 mV"));
+    auto *r = running(msgs, "cv_status");
+    CHECK(r != nullptr);
+    if (r) {
+      CHECK(r->doc["calibrated"].as<bool>() == true);
+      CHECK(std::fabs(r->doc["rtiaNominalOhms"].as<double>() - 10000.0) < 1e-3);
+      CHECK(std::fabs(r->doc["rtiaCalibratedOhms"].as<double>() - 12300.0) < 1e-3);
+      CHECK(r->doc["rtiaCalibrated"].as<bool>() == true);
+      CHECK(std::fabs(r->doc["currentOffsetUa"].as<double>() + 2.7) < 1e-4);
+      CHECK(std::fabs(r->doc["potentialOffsetMv"].as<double>() - 45.0) < 1e-4);
+      CHECK(std::fabs(r->doc["vzeroV"].as<double>() - 1.3) < 1e-4);
+    }
+    checkCvOnSchedule(100.0, 801);     // the calibration comes before the sweep: its timing is unchanged
+    checkOff("CV with the calibration");
+  }
+
+  std::printf("    ...it counts as part of the quiet time, and a calibration longer than the quiet time adds no wait\n");
+  reset();
+  g_cal_us = 1200000;                    // 1.2 s of the 2 s quiet time
+  run(SWV_DEFAULT);
+  {
+    auto msgs = parse("swv_data");
+    CHECK(msgs.size() == 401);
+    // the first reading is at the end of the first half-pulse: 2 s after the start of the run
+    CHECK(msgs.size() > 0 && std::fabs(msgs[0].doc["time"].as<double>() - 2.0) < 0.1, "time of the first point %.3f", msgs[0].doc["time"].as<double>());
+    const uint64_t start1 = g_clock_us;
+    reset();
+    g_cal_us = 3000000;                  // 3 s, longer than the 2 s of quiet time
+    run(SWV_DEFAULT);
+    const uint64_t start2 = g_clock_us;
+    // the run takes the calibration (3 s) plus the sweep, and not the calibration plus 2 s more of quiet time
+    CHECK(start2 - start1 < 2000000 + 500000, "the longer calibration added %.3f s", (double)(start2 - start1) / 1e6);
+  }
+
+  std::printf("    ...RCAL missing or the RTIA implausible: the nominal RTIA, a warning, and the run goes on\n");
+  reset();
+  g_cal_script.rtiaCalibrated = false;
+  g_cal_script.zeroMeasured = false;
+  g_cal_script.currentOffsetUa = 0.0f;
+  std::snprintf(g_cal_script.note, sizeof(g_cal_script.note), "RTIA calibration failed or timed out (RCAL missing?)");
+  run(CV_DEFAULT);
+  {
+    auto msgs = parse();
+    CHECK(g_last_rtia == 10000.0f, "the reads converted with RTIA %.0f", g_last_rtia);
+    CHECK(logHas("calibrated 10000 ohm (nominal used, not calibrated)"));
+    CHECK(logHas("[CAL] WARNING: RTIA calibration failed or timed out (RCAL missing?)"));
+    auto *r = running(msgs, "cv_status");
+    CHECK(r != nullptr && r->doc["rtiaCalibrated"].as<bool>() == false);
+    CHECK(r != nullptr && std::string((const char *)(r->doc["calibrationNote"] | "")).find("RCAL") != std::string::npos);
+    checkCvOnSchedule(100.0, 801);
+  }
+
+  std::printf("    ...the app can switch it off: \"calibrate\": false uses the plain setup\n");
+  reset();
+  run("{\"command\":\"start_cv\",\"eStart\":0.6,\"eVertex1\":-0.2,\"eVertex2\":0.6,\"nCycles\":1,\"stepMv\":2,\"scanRate\":100,\"quietTime\":0,\"rtiaOhms\":10000,\"calibrate\":false}");
+  {
+    auto msgs = parse();
+    CHECK(g_cal_calls == 0 && g_plain_setup_calls == 1);
+    CHECK(g_last_rtia == 10000.0f);
+    CHECK(logHas("[CAL] calibration switched off"));
+    auto *r = running(msgs, "cv_status");
+    CHECK(r != nullptr && r->doc["calibrated"].as<bool>() == false);
+    checkCvOnSchedule(100.0, 801);
+  }
+
+  std::printf("T22 SWV and BioFET start with the calibration too\n");
+  reset();
+  run(SWV_DEFAULT);
+  {
+    CHECK(g_cal_calls == 1 && g_last_rtia == 12300.0f);
+    CHECK(std::fabs(g_cal_start_bias - 200.0f) < 1e-3, "start bias %.1f", g_cal_start_bias);   // E = -0.2 V is a bias of +200 mV
+    auto *r = running(parse(), "swv_status");
+    CHECK(r != nullptr);
+  }
+  reset();
+  run(FET_DEFAULT);
+  {
+    auto msgs = parse();
+    CHECK(g_cal_calls == 1 && g_last_rtia == 12300.0f);
+    CHECK(std::fabs(g_cal_start_bias - (-500.0f)) < 1e-3, "start bias %.1f", g_cal_start_bias);   // the gate voltage is not converted
+    auto *r = running(msgs, "fet_status");
+    CHECK(r != nullptr);
+    if (r) CHECK(std::fabs(r->doc["potentialOffsetMv"].as<double>() + 45.0) < 1e-4, "the BioFET reports the bias offset");
+    CHECK(logHas("potential offset -45.0 mV"));
+  }
 
   std::printf("\n%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;

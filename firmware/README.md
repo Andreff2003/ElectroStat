@@ -129,6 +129,71 @@ our discussion — Overlay is how you'd compare them either way.
   "return"), so for 0 -> -0.5 -> +0.5 V at 2 mV one cycle is 1001 points.
   Before, the last cycle stopped at vertex 2 (751 points) and the app,
   which counts the return, expected about 1000.
+- **CV, SWV and BioFET calibrate current and potential at the start of
+  every run, and RCAL has to be mounted for that, as it does for EIS.**
+  The current is the HSTIA output over its RTIA, and the AD5941 gives
+  neither exactly. A dummy cell (10 kOhm, 1 kOhm, and 1 kOhm + 100 uF)
+  showed a constant offset of about -2.7 uA, currents 10 to 20 % too high
+  (the 10 kOhm resistor read about 123 uA/V instead of 100, a 104 uF
+  capacitor about 114 to 127 uF) and a potential offset of 40 to 50 mV.
+  `AD5940_AmperometrySetupCalibrated()` (an ElectroStat addition to
+  `HELPStat.cpp`) now, each step guarded and none of them fatal:
+  1. resets and initializes the AFE, and calibrates the ADC PGA 1 offset and
+     gain (`AD5940_ADCPGACal`);
+  2. measures the HSTIA's RTIA against RCAL (`AD5940_HSRtiaCal`, 120 Hz,
+     `RCAL_OHMS`) and converts the current with it. It is believed only
+     within 30 % of the nominal value; if RCAL is missing or the result is
+     further, the nominal RTIA is used and a warning says so;
+  3. measures the code to voltage transfer functions of the 12-bit Vbias and
+     the 6-bit Vzero (`AD5940_LPDACCal`), so that Vzero and the bias code are
+     the real ones. The 6-bit code the firmware programs (32) gives
+     0.2 V + 32 * 34.375 mV = **1.3 V**, not the 1.1 V that
+     `AD5940_AmperometryRead` assumed, so the 0.2 to 2.1 V window of the
+     "out of range" flag was shifted by 0.2 V. It now uses the real Vzero;
+  4. applies the start potential, and measures V(RE0) - V(SE0) with the ADC
+     against the 1.11 V reference (the two readings cancel it and the ADC
+     offset). The difference to the bias that was programmed is the
+     potential offset, and it is taken off every bias from then on (only if
+     it is within 150 mV: with no cell, RE0 floats and the reading means
+     nothing);
+  5. disconnects SE0 from the HSTIA and measures the HSTIA output with no
+     cell current, 16 readings, and subtracts it from every reading.
+  The calibration runs before the sweep and counts as part of the quiet
+  time (a calibration longer than the quiet time adds no wait). The result
+  is printed once, `[CAL] RTIA nominal X, calibrated Y ohm; current offset Z
+  uA; potential offset W mV` (W is the offset of E of WE vs RE for CV and
+  SWV, and of the bias for BioFET), with `[CAL] WARNING: ...` for whatever
+  failed, and it is sent in the "running" status message of the sweep as the
+  new fields `calibrated`, `rtiaNominalOhms`, `rtiaCalibratedOhms`,
+  `rtiaCalibrated`, `currentOffsetUa`, `potentialOffsetMv`, `vzeroV` and
+  `calibrationNote`. `"calibrate": false` in the start command skips it all
+  and keeps the nominal behavior. The arithmetic is tested on a PC; **none
+  of it has been tested on the board**: check the `[CAL]` lines on a 1 kOhm
+  and a 10 kOhm resistor first (the RTIA should come out 10 to 20 % off
+  nominal, the offset near -2.7 uA, and the CV of the resistor should
+  cross the origin with a slope of 1 mA/V per kOhm). The RTIA and the
+  offsets depend on the value of RCAL, so measure it and set `RCAL_OHMS`.
+  `AD5940_HSRtiaCal` (Analog Devices code, left unmodified as the NOTICE asks)
+  waits for the DFT with no time-out and would
+  hang the firmware if the ADC did not run. It is therefore only called once
+  the ADC has just calibrated and the chip answers (`AD5940_GetADIID`). A
+  missing RCAL does not hang it: the DFT still completes, gives a wrong RTIA,
+  and the 30 % check sends the run back to the nominal one.
+  **Is each reported E the potential applied when its current was read?**
+  Yes, there is no off-by-one: the potential of a step is set when its slot
+  opens and the current is read at the end of the same slot, and the point
+  carries the E of that step (checked in the simulation, which compares the
+  bias of every read with the E it is reported at). What is not known is how
+  fast the bias settles after each step: the firmware assumes the 5 ms of
+  `kSettleUs` inside a slot, which is a guess. The forward and return
+  segments of the CV of a 1 kOhm resistor were separated by about two 2 mV
+  steps, which is what a bias that lags by a few time constants of the
+  external capacitor on Vbias would do (the lag in volts is the scan rate
+  times the time constant). To settle it, put a scope on RE0 while a CV
+  runs, or run the same CV at two scan rates: a lag in volts that doubles
+  with the scan rate is a settling time. Until then the bias is only waited
+  for 150 ms before the potential is measured at the start, and nothing in
+  the sweep compensates for the lag.
 - **The cell is left unpolarized after CV, SWV and BioFET.** The AFE used
   to stay on, and the cell at the last applied potential, until the next
   command (EIS already ended with `AD5940_ShutDownS()`). With a real

@@ -134,6 +134,90 @@ inline float lpdacBiasMvFromE(float eMv) {
   return c == 0.0f ? 0.0f : -c;   // no negative zero
 }
 
+// ── Calibration of the amperometric path (CV, SWV, BioFET) ───────
+// The current of CV, SWV and BioFET is the voltage across the HSTIA's RTIA
+// divided by RTIA, and the AD5941 gives neither exactly: the internal RTIA is off
+// by 10 to 20 % from its nominal value, the ADC has an offset and a gain error, the
+// HSTIA and the leakage of the input add a current when none flows, and the LPDAC
+// does not give exactly the potential that its code says. A dummy cell showed it:
+// a constant offset of about -2.7 uA, currents 10 to 20 % too high, and a potential
+// offset of 40 to 50 mV. At the start of every run the firmware measures these and
+// corrects for them, and falls back to the nominal values, with a warning, when it
+// cannot. Everything that is arithmetic is here, so that it is tested on a PC.
+
+/** What the calibration at the start of a CV, SWV or BioFET run found. */
+struct AmperometryCalResult {
+  bool attempted = false;        // the calibration was asked for (the app can switch it off)
+  bool pgaCalibrated = false;    // ADC PGA offset and gain calibration for PGA 1 succeeded
+  bool rtiaCalibrated = false;   // RTIA measured against RCAL, and within kRtiaMaxDeviation of nominal
+  float rtiaNominalOhms = 0.0f;
+  float rtiaOhms = 0.0f;         // what to convert with: calibrated, or nominal when it is not
+  bool zeroMeasured = false;     // the reading with the cell disconnected was measured
+  float zeroVolt = 0.0f;         // that reading (HSTIA output minus its zero), subtracted from every reading
+  float currentOffsetUa = 0.0f;  // the same, as a current at rtiaOhms, for the report
+  bool lpdacCalibrated = false;  // the LPDAC code to voltage transfer functions were measured
+  float vzeroV = 1.3f;           // real Vzero: measured, or the nominal 1.3 V
+  bool potentialMeasured = false;
+  float biasOffsetMv = 0.0f;     // V(RE0) - V(SE0) measured, minus the bias that was programmed, at the start bias
+  float potentialOffsetMv = 0.0f;// the same as an offset of E(WE) vs RE (minus biasOffsetMv), for CV and SWV
+  char note[160] = {0};          // what failed or was skipped, one line (empty when everything worked)
+};
+
+constexpr float kRtiaMaxDeviation = 0.30f;       // beyond this from nominal, a calibrated RTIA is not believed
+constexpr float kPotentialOffsetMaxMv = 150.0f;  // beyond this, the measured potential offset is not believed
+constexpr float kVzeroNominalV = 1.3f;           // 0.2 V + 32 * 34.375 mV, the 6-bit code the firmware programs
+constexpr float kVzeroMaxDeviationV = 0.15f;     // a measured Vzero further than this from nominal is not believed
+constexpr float kHstiaOutMinV = 0.2f;            // usable window of the HSTIA output for the ADC
+constexpr float kHstiaOutMaxV = 2.1f;
+
+inline bool rtiaPlausible(float measuredOhms, float nominalOhms) {
+  if (!(measuredOhms > 0.0f) || !(nominalOhms > 0.0f) || !isfinite(measuredOhms)) return false;
+  return fabsf(measuredOhms - nominalOhms) <= kRtiaMaxDeviation * nominalOhms;
+}
+
+// The current of a reading, in uA: the HSTIA output (relative to Vzero) minus the
+// reading with the cell disconnected, over the RTIA.
+inline float amperometryCurrentUa(float diffVolt, float zeroVolt, float rtiaOhms) {
+  return ((diffVolt - zeroVolt) / rtiaOhms) * 1.0e6f;
+}
+
+// The window check used for the "out of range" flag: the HSTIA output sits at
+// Vzero + diffVolt, and has to stay inside the 0.2 to 2.1 V of the ADC. It used to
+// assume Vzero = 1.1 V, but the 6-bit code the firmware programs gives 1.3 V.
+inline bool hstiaOutOfWindow(float vzeroV, float diffVolt) {
+  const float out = vzeroV + diffVolt;
+  return out < kHstiaOutMinV || out > kHstiaOutMaxV;
+}
+
+inline float vzeroFromTransferV(float bC2V_mV, float kC2V_mV, int code6) {
+  return (bC2V_mV + kC2V_mV * (float)code6) / 1000.0f;
+}
+
+// The 12-bit LPDAC code that gives Vbias = Vzero + biasMv, from the measured
+// transfer function V(mV) = k * code + b, clamped to the 12-bit range.
+inline int lpdacCode12(float vzeroV, float biasMv, float kC2V_mV, float bC2V_mV) {
+  const float targetMv = vzeroV * 1000.0f + biasMv;
+  const float code = (targetMv - bC2V_mV) / kC2V_mV;
+  if (!(code > 0.0f)) return 0;
+  if (code > 4095.0f) return 4095;
+  return (int)(code + 0.5f);
+}
+
+// Measured potential offset: what V(RE0) - V(SE0) read, minus the bias that was
+// programmed. The bias that is applied afterwards is the requested one minus this.
+inline float biasOffsetMvFrom(float vre0V, float vse0V, float programmedBiasMv) {
+  return (vre0V - vse0V) * 1000.0f - programmedBiasMv;
+}
+inline bool potentialOffsetPlausible(float offsetMv) {
+  return isfinite(offsetMv) && fabsf(offsetMv) <= kPotentialOffsetMaxMv;
+}
+inline float correctedBiasMv(float biasMv, float biasOffsetMv) {
+  float b = biasMv - biasOffsetMv;
+  if (b < -kLpdacBiasLimitMv) b = -kLpdacBiasLimitMv;
+  if (b >  kLpdacBiasLimitMv) b =  kLpdacBiasLimitMv;
+  return b;
+}
+
 // ── EIS low-signal check ─────────────────────────────────────────
 // HELPStat computes Rz = (DFT Cal / DFT Mag) * RCAL, where the two magnitudes
 // are DFT results in counts. With 1 or 2 counts in either one the quantization

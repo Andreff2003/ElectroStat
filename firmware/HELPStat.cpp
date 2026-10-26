@@ -2453,8 +2453,13 @@ void HELPStat::AD5940_TDDNoise(float biasVolt, float zeroVolt) {
   float sineVpp = 200.0; // 200 mV 
 
   /* Use hardware reset */
-  AD5940_HWReset();
-  AD5940_Initialize();
+  /* ElectroStat addition: AD5940_AmperometrySetupCalibrated() calibrates first and brings the AFE up
+     afterwards, and a reset here would erase the calibration (the ADC gain and offset registers). */
+  if(!_skipAfeReset)
+  {
+    AD5940_HWReset();
+    AD5940_Initialize();
+  }
 
   /* Platform configuration */
   /* Step1. Configure clock - NEED THIS */
@@ -3054,6 +3059,12 @@ void HELPStat::AD5940_HSTIARcal(int rHSTIA, float rcalVal) {
    ================================================================ */
 
 void HELPStat::AD5940_AmperometrySetup(uint32_t hstiaRtiaSel) {
+  // ElectroStat addition: the plain setup is the nominal behavior, whatever a calibrated run left behind.
+  _skipAfeReset = false;
+  _currentZeroVolt = 0.0f;
+  _biasOffsetMv = 0.0f;
+  _lpdacCalValid = false;
+  _vzeroV = estat::kVzeroNominalV;
   // Reuses the library's own proven AFE bring-up sequence. Pass a
   // (deliberately nonzero, otherwise-unused) 1 mV bias so AD5940_TDDNoise
   // takes its "bias enabled" branch — that's the one that configures the
@@ -3071,7 +3082,9 @@ void HELPStat::AD5940_AmperometrySetBias(float biasMillivolts) {
   // ── Update the LPDAC bias only (cheap — no HWReset/Initialize) ──
   // Same bit-conversion formula as AD5940_TDDNoise's zeroVolt==0 branch
   // (bias centred on the 1.1 V Vzero reference, +-1100 mV range).
-  float clampedBiasMv = biasMillivolts;
+  // ElectroStat addition: the measured potential offset (0 unless the calibration ran) is
+  // taken off the bias, so that the potential at the cell is the one that was asked for.
+  float clampedBiasMv = estat::correctedBiasMv(biasMillivolts, _biasOffsetMv);
   if (clampedBiasMv < -1100.0f) clampedBiasMv = -1100.0f + DAC12BITVOLT_1LSB;
   if (clampedBiasMv >  1100.0f) clampedBiasMv =  1100.0f - DAC12BITVOLT_1LSB;
 
@@ -3083,7 +3096,13 @@ void HELPStat::AD5940_AmperometrySetBias(float biasMillivolts) {
   lpdac_cfg.LpDacSrc = LPDACSRC_MMR;
   lpdac_cfg.PowerEn = bTRUE;
   lpdac_cfg.DacData6Bit = 0x40 >> 1; // Vzero at mid-scale (~1.1 V), same as AD5940_TDDNoise
-  lpdac_cfg.DacData12Bit = (uint16_t)((clampedBiasMv + 1100.0f) / DAC12BITVOLT_1LSB);
+  if (_lpdacCalValid) {
+    // ElectroStat addition: the code from the measured transfer function of the 12-bit DAC,
+    // so that Vbias - Vzero is the real bias and not the nominal one.
+    lpdac_cfg.DacData12Bit = (uint16_t)estat::lpdacCode12(_vzeroV, clampedBiasMv, _lpdacK12, _lpdacB12);
+  } else {
+    lpdac_cfg.DacData12Bit = (uint16_t)((clampedBiasMv + 1100.0f) / DAC12BITVOLT_1LSB);
+  }
   lpdac_cfg.DataRst = bFALSE;
   lpdac_cfg.LpDacSW = LPDACSW_VBIAS2LPPA|LPDACSW_VBIAS2PIN|LPDACSW_VZERO2LPTIA|LPDACSW_VZERO2PIN|LPDACSW_VZERO2HSTIA;
   AD5940_LPDACCfgS(&lpdac_cfg);
@@ -3123,19 +3142,18 @@ float HELPStat::AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange) {
   if (outOfRange) {
     // HSTIA_N is switched to VZERO0 above (LPDACSW_VZERO2HSTIA), so this is
     // a differential HSTIA_P - Vzero reading; the absolute HSTIA output pin
-    // voltage is Vzero + diffVolt. Vzero is fixed at the ~1.1V mid-scale
-    // this function always programs (DacData6Bit above) — see the caveat
-    // on this function's declaration in HELPStat.h.
-    const float HSTIA_VZERO_V = 1.1f;
-    const float ADC_WINDOW_MIN_V = 0.2f;
-    const float ADC_WINDOW_MAX_V = 2.1f;
-    float hstiaOutV = HSTIA_VZERO_V + diffVolt;
-    *outOfRange = (hstiaOutV < ADC_WINDOW_MIN_V || hstiaOutV > ADC_WINDOW_MAX_V);
+    // voltage is Vzero + diffVolt. ElectroStat addition: Vzero is not 1.1 V.
+    // The 6-bit code this function programs (32) gives 0.2 V + 32 * 34.375 mV =
+    // 1.3 V, and _vzeroV is that, or the measured value after the calibration.
+    // The window is then 0.2 to 2.1 V on the real output (see estat::hstiaOutOfWindow).
+    *outOfRange = estat::hstiaOutOfWindow(_vzeroV, diffVolt);
   }
 
   // HSTIA converts sensed current to an output voltage via I = V / Rtia;
   // returned in microamps to match the units bridge.py/the app expect.
-  return (diffVolt / rtiaOhms) * 1.0e6f;
+  // ElectroStat addition: minus the reading with the cell disconnected (0 unless the
+  // calibration ran), and rtiaOhms is the calibrated RTIA when the caller passes it.
+  return estat::amperometryCurrentUa(diffVolt, _currentZeroVolt, rtiaOhms);
 }
 
 void HELPStat::AD5940_AmperometryShutDown(void) {
@@ -3149,6 +3167,256 @@ void HELPStat::AD5940_AmperometryShutDown(void) {
   sw_cfg.Tswitch = SWT_OPEN;
   AD5940_SWMatrixCfgS(&sw_cfg);
   AD5940_ShutDownS();
+}
+
+/* ================================================================
+   ElectroStat addition — calibration of the amperometric path.
+   See AD5940_AmperometrySetupCalibrated in HELPStat.h and
+   estat::AmperometryCalResult in ElectroStat_Timing.h for what it does and why.
+   UNTESTED against real hardware: every step is guarded, a step that fails
+   leaves the nominal behavior for what it was meant to correct and says so in
+   the result's note, and the arithmetic is tested on a PC (firmware/test).
+   ================================================================ */
+
+/* Averages `samples` ADC conversions of one pin pair and returns the voltage (PGA 1, the same
+   conversion as AD5940_AmperometryRead). False if the ADC never signals ready. */
+bool HELPStat::measureAdcVolt(uint32_t muxP, uint32_t muxN, int samples, float *volts) {
+  ADCBaseCfg_Type adc_base;
+  adc_base.ADCMuxP = muxP;
+  adc_base.ADCMuxN = muxN;
+  adc_base.ADCPga = ADCPGA_1;
+  AD5940_ADCBaseCfgS(&adc_base);
+  AD5940_ADCPowerCtrlS(bTRUE);
+  double sum = 0.0;
+  for (int s = 0; s < samples; s++) {
+    AD5940_INTCClrFlag(AFEINTSRC_ADCRDY);
+    AD5940_ADCConvtCtrlS(bTRUE);
+    delay(2);
+    uint32_t waited = 0;
+    while (!AD5940_INTCTestFlag(AFEINTC_1, AFEINTSRC_ADCRDY)) {
+      delay(1);
+      if (++waited > 1000) {
+        AD5940_ADCPowerCtrlS(bFALSE);
+        AD5940_ADCConvtCtrlS(bFALSE);
+        return false;
+      }
+    }
+    AD5940_INTCClrFlag(AFEINTSRC_ADCRDY);
+    sum += (double)AD5940_ReadAfeResult(AFERESULT_SINC3);
+    AD5940_ADCConvtCtrlS(bFALSE);
+  }
+  AD5940_ADCPowerCtrlS(bFALSE);
+  *volts = AD5940_ADCCode2Volt((uint32_t)(sum / samples + 0.5), ADCPGA_1, 1.816f);
+  return true;
+}
+
+/* The switch matrix as AD5940_TDDNoise() leaves it for the amperometric path: the cell on CE0, RE0
+   and SE0, with SE0 through the load resistor to the HSTIA. */
+void HELPStat::restoreAmperometrySwitches(void) {
+  SWMatrixCfg_Type sw_cfg;
+  sw_cfg.Dswitch = SWD_CE0;
+  sw_cfg.Pswitch = SWP_RE0;
+  sw_cfg.Nswitch = SWN_SE0;
+  sw_cfg.Tswitch = SWT_SE0LOAD|SWT_TRTIA;
+  AD5940_SWMatrixCfgS(&sw_cfg);
+}
+
+/* RTIA of the HSTIA against RCAL at 120 Hz (the method of AD5940_HSTIARcal above, without the
+   shutdown and the print). False if the calibration fails or times out. */
+static bool hsRtiaMeasure(int rtiaSel, float rcalOhms, float *rtiaOhms) {
+  HSRTIACal_Type cal;
+  memset(&cal, 0, sizeof(cal));
+  const FreqParams_Type fp = AD5940_GetFreqParameters(120.0f);
+  cal.fFreq = 120.0f;
+  cal.fRcal = rcalOhms;
+  cal.SysClkFreq = 16000000.0f;
+  cal.AdcClkFreq = 16000000.0f;
+  cal.HsTiaCfg.DiodeClose = bFALSE;
+  cal.HsTiaCfg.HstiaBias = HSTIABIAS_1P1;
+  cal.HsTiaCfg.HstiaCtia = 31;
+  cal.HsTiaCfg.HstiaDeRload = HSTIADERLOAD_OPEN;
+  cal.HsTiaCfg.HstiaDeRtia = HSTIADERTIA_OPEN;
+  cal.HsTiaCfg.HstiaDe1Rload = HSTIADERLOAD_OPEN;
+  cal.HsTiaCfg.HstiaDe1Rtia = HSTIADERTIA_OPEN;
+  cal.HsTiaCfg.HstiaRtiaSel = rtiaSel;
+  cal.ADCSinc2Osr = fp.ADCSinc2Osr;
+  cal.ADCSinc3Osr = fp.ADCSinc3Osr;
+  cal.DftCfg.DftNum = fp.DftNum;
+  cal.DftCfg.DftSrc = fp.DftSrc;
+  cal.DftCfg.HanWinEn = bTRUE;
+  cal.bPolarResult = bTRUE;
+  fImpPol_Type res;
+  memset(&res, 0, sizeof(res));
+  if (AD5940_HSRtiaCal(&cal, &res) != AD5940ERR_OK) return false;
+  *rtiaOhms = res.Magnitude;
+  return isfinite(*rtiaOhms);
+}
+
+/* Appends to the one-line note of the result, as far as it fits. */
+static void addCalNote(estat::AmperometryCalResult *r, const char *text) {
+  const size_t cap = sizeof(r->note);
+  size_t len = strlen(r->note);
+  if (len > 0 && len + 2 < cap) { r->note[len++] = ';'; r->note[len++] = ' '; r->note[len] = 0; }
+  strncat(r->note, text, cap - strlen(r->note) - 1);
+}
+
+void HELPStat::AD5940_AmperometrySetupCalibrated(uint32_t hstiaRtiaSel, float rtiaNominalOhms, float rcalOhms,
+                                                 float startBiasMv, estat::AmperometryCalResult *res) {
+  estat::AmperometryCalResult r;
+  r.attempted = true;
+  r.rtiaNominalOhms = rtiaNominalOhms;
+  r.rtiaOhms = rtiaNominalOhms;
+  // The nominal behavior, until a step below proves better.
+  _currentZeroVolt = 0.0f;
+  _biasOffsetMv = 0.0f;
+  _lpdacCalValid = false;
+  _vzeroV = estat::kVzeroNominalV;
+
+  /* Reset and initialize first. The plain setup does it inside AD5940_TDDNoise(), after which a
+     calibration would find the AFE configured for something else, and a reset after the
+     calibration would erase the ADC gain and offset it wrote. */
+  AD5940_HWReset();
+  AD5940_Initialize();
+
+  /* 1. ADC PGA 1, offset and gain (the settings of HELPStat::PGACal). */
+  {
+    ADCPGACal_Type pc;
+    memset(&pc, 0, sizeof(pc));
+    pc.AdcClkFreq = 16e6f;
+    pc.SysClkFreq = 16e6f;
+    pc.ADCSinc2Osr = ADCSINC2OSR_178;
+    pc.ADCSinc3Osr = ADCSINC3OSR_4;
+    pc.TimeOut10us = 1000;
+    pc.VRef1p11 = 1.11f;
+    pc.VRef1p82 = 1.82f;
+    pc.PGACalType = PGACALTYPE_OFFSETGAIN;
+    pc.ADCPga = ADCPGA_1;
+    r.pgaCalibrated = (AD5940_ADCPGACal(&pc) == AD5940ERR_OK);
+    if (!r.pgaCalibrated) addCalNote(&r, "ADC PGA calibration failed");
+  }
+
+  /* 2. RTIA against RCAL. Needs an RCAL that is a resistor value; the result is believed only within
+     30 % of nominal (the internal RTIA is off by 10 to 20 %, a value far from that is a wrong RCAL or a
+     calibration that did not work). */
+  if (rcalOhms > 100.0f && rcalOhms < 1.0e6f && (!r.pgaCalibrated || AD5940_GetADIID() != 0x4144)) {
+    // AD5940_HSRtiaCal is Analog Devices code that this project does not modify, and it waits for the
+    // DFT with no time-out: it would hang the firmware if the ADC did not run. So it is only called
+    // once the ADC has just calibrated and the chip answers.
+    addCalNote(&r, "RTIA calibration skipped: the ADC did not calibrate or the AFE does not answer");
+  } else if (rcalOhms > 100.0f && rcalOhms < 1.0e6f) {
+    float measured = 0.0f;
+    if (hsRtiaMeasure((int)hstiaRtiaSel, rcalOhms, &measured)) {
+      if (estat::rtiaPlausible(measured, rtiaNominalOhms)) {
+        r.rtiaCalibrated = true;
+        r.rtiaOhms = measured;
+      } else {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "RTIA measured %.0f ohm is more than 30%% from nominal (RCAL missing?)", measured);
+        addCalNote(&r, msg);
+      }
+    } else {
+      addCalNote(&r, "RTIA calibration failed or timed out (RCAL missing?)");
+    }
+  } else {
+    addCalNote(&r, "no valid RCAL value");
+  }
+
+  /* 3. The LPDAC code to voltage transfer functions of the 12-bit Vbias and the 6-bit Vzero, so that
+     Vzero is the real one and the code for a bias is computed from it. */
+  {
+    LPDACCal_Type lc;
+    memset(&lc, 0, sizeof(lc));
+    lc.LpdacSel = LPDAC0;
+    lc.SysClkFreq = 16e6f;
+    lc.AdcClkFreq = 16e6f;
+    lc.ADCRefVolt = 1.82f;
+    lc.ADCSinc3Osr = ADCSINC3OSR_4;
+    lc.ADCSinc2Osr = ADCSINC2OSR_178;
+    lc.SettleTime10us = 100;
+    lc.TimeOut10us = 3000;
+    LPDACPara_Type lp;
+    memset(&lp, 0, sizeof(lp));
+    if (AD5940_LPDACCal(&lc, &lp) == AD5940ERR_OK) {
+      const float vzero = estat::vzeroFromTransferV(lp.bC2V_DAC6B, lp.kC2V_DAC6B, 32);
+      const bool kOk = isfinite(lp.kC2V_DAC12B) && fabsf(lp.kC2V_DAC12B - 0.5371f) < 0.1f * 0.5371f;
+      const bool vOk = isfinite(vzero) && fabsf(vzero - estat::kVzeroNominalV) <= estat::kVzeroMaxDeviationV;
+      if (kOk && vOk && isfinite(lp.bC2V_DAC12B)) {
+        _lpdacCalValid = true;
+        _lpdacK12 = lp.kC2V_DAC12B;
+        _lpdacB12 = lp.bC2V_DAC12B;
+        _vzeroV = vzero;
+        r.lpdacCalibrated = true;
+        r.vzeroV = vzero;
+      } else {
+        addCalNote(&r, "LPDAC calibration gave implausible values, nominal Vzero 1.3 V");
+      }
+    } else {
+      addCalNote(&r, "LPDAC calibration failed, nominal Vzero 1.3 V");
+    }
+  }
+
+  /* The AFE as the plain setup leaves it, without a second reset (it would erase 1), with the gain of
+     the sweep. */
+  _skipAfeReset = true;
+  AD5940_TDDNoise(1.0f, 0.0f);
+  _skipAfeReset = false;
+  AD5940_HSRTIACfgS(hstiaRtiaSel);
+
+  /* 4. The potential offset: the bias at the start of the sweep is applied, and V(RE0) - V(SE0) is read
+     (each against the 1.11 V reference, which cancels). The ADC offset of the two readings cancels too.
+     Corrected for only when it is plausible: with no cell connected RE0 floats and the reading is
+     nonsense. */
+  {
+    AD5940_AmperometrySetBias(startBiasMv);
+    delay(150);   // the bias settles through the external capacitor on the board
+    float vre = 0.0f, vse = 0.0f;
+    if (measureAdcVolt(ADCMUXP_VRE0, ADCMUXN_VREF1P1, 8, &vre) &&
+        measureAdcVolt(ADCMUXP_VSE0, ADCMUXN_VREF1P1, 8, &vse)) {
+      const float off = estat::biasOffsetMvFrom(vre, vse, startBiasMv);
+      r.potentialMeasured = true;
+      if (estat::potentialOffsetPlausible(off)) {
+        _biasOffsetMv = off;
+        r.biasOffsetMv = off;
+        r.potentialOffsetMv = -off;
+      } else {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "potential offset %.0f mV is implausible (no cell?), not corrected", off);
+        addCalNote(&r, msg);
+        r.potentialMeasured = false;
+      }
+    } else {
+      addCalNote(&r, "potential measurement failed");
+    }
+    AD5940_AmperometrySetBias(startBiasMv);   // again, now with the correction
+  }
+
+  /* 5. The reading with the cell disconnected: SE0 is taken off the HSTIA, so no cell current flows,
+     and whatever the HSTIA output shows is offset. */
+  {
+    SWMatrixCfg_Type sw_cfg;
+    sw_cfg.Dswitch = SWD_CE0;
+    sw_cfg.Pswitch = SWP_RE0;
+    sw_cfg.Nswitch = SWN_SE0;
+    sw_cfg.Tswitch = SWT_TRTIA;   // no SWT_SE0LOAD
+    AD5940_SWMatrixCfgS(&sw_cfg);
+    delay(20);
+    float zero = 0.0f;
+    if (measureAdcVolt(ADCMUXP_HSTIA_P, ADCMUXN_HSTIA_N, 16, &zero)) {
+      if (isfinite(zero) && fabsf(zero) <= 0.2f) {
+        _currentZeroVolt = zero;
+        r.zeroMeasured = true;
+        r.zeroVolt = zero;
+        r.currentOffsetUa = (zero / r.rtiaOhms) * 1.0e6f;
+      } else {
+        addCalNote(&r, "zero-current reading implausible, not subtracted");
+      }
+    } else {
+      addCalNote(&r, "zero-current measurement failed");
+    }
+    restoreAmperometrySwitches();
+  }
+
+  if (res) *res = r;
 }
 
 float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange, uint16_t settleMs) {
