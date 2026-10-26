@@ -32,6 +32,12 @@ import type { SWVDataPoint } from "@/types/swv";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
+/** Sweep state as reported by the device (through the bridge). */
+export type SweepDeviceStatus = "idle" | "running" | "done" | "error";
+
+const isSweepDeviceStatus = (s: unknown): s is SweepDeviceStatus =>
+  s === "idle" || s === "running" || s === "done" || s === "error";
+
 interface UseWebSocketDataReturn {
   // Connection
   status: ConnectionStatus;
@@ -43,12 +49,20 @@ interface UseWebSocketDataReturn {
   eisData: EISDataPoint[];
   clearEIS: () => void;
   lastFilename: string;
+  /**
+   * Device-reported EIS sweep state, from {"type":"eis_status"} and
+   * {"type":"eis_done"}. "done" means the sweep ended on the device side, so
+   * the app can freeze the points received so far. Reset to "idle" by clearEIS().
+   */
+  eisStatus: SweepDeviceStatus;
 
   // FET data
   fetBaseline: FETTransferPoint[];
   fetAnalyte: FETTransferPoint[];
   fetTimeData: FETTimePoint[];
   clearFET: () => void;
+  /** Same as eisStatus, from fet_status / fet_done. Reset to "idle" by clearFET(). */
+  fetStatus: SweepDeviceStatus;
 
   // CV data
   cvData: CVDataPoint[];
@@ -72,6 +86,8 @@ export function useWebSocketData(): UseWebSocketDataReturn {
 
   const [eisData, setEisData] = useState<EISDataPoint[]>([]);
   const [lastFilename, setLastFilename] = useState("");
+  const [eisStatus, setEisStatus] = useState<SweepDeviceStatus>("idle");
+  const [fetStatus, setFetStatus] = useState<SweepDeviceStatus>("idle");
   const [fetBaseline, setFetBaseline] = useState<FETTransferPoint[]>([]);
   const [fetAnalyte, setFetAnalyte] = useState<FETTransferPoint[]>([]);
   const [fetTimeData, setFetTimeData] = useState<FETTimePoint[]>([]);
@@ -173,6 +189,25 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               setFetTimeData((prev) => [...prev, { time, id, outOfRange }]);
               break;
             }
+
+            // The firmware and bridge.py send both eis_done and eis_status
+            // "done" at the end of a sweep. Either one marks the end, and the
+            // second is a no-op because the state is already "done".
+            case "eis_done":
+              setEisStatus("done");
+              break;
+
+            case "eis_status":
+              if (isSweepDeviceStatus(msg.status)) setEisStatus(msg.status);
+              break;
+
+            case "fet_done":
+              setFetStatus("done");
+              break;
+
+            case "fet_status":
+              if (isSweepDeviceStatus(msg.status)) setFetStatus(msg.status);
+              break;
 
             case "cv_data": {
               const pt = parseCVWebSocketMessage(msg);
@@ -291,11 +326,13 @@ export function useWebSocketData(): UseWebSocketDataReturn {
   const clearEIS = useCallback(() => {
     setEisData([]);
     setLastFilename("");
+    setEisStatus("idle");
   }, []);
   const clearFET = useCallback(() => {
     setFetBaseline([]);
     setFetAnalyte([]);
     setFetTimeData([]);
+    setFetStatus("idle");
   }, []);
   const clearCV = useCallback(() => {
     setCvData([]);
@@ -324,10 +361,12 @@ export function useWebSocketData(): UseWebSocketDataReturn {
     eisData,
     clearEIS,
     lastFilename,
+    eisStatus,
     fetBaseline,
     fetAnalyte,
     fetTimeData,
     clearFET,
+    fetStatus,
     cvData,
     clearCV,
     cvStatus,

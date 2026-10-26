@@ -42,6 +42,7 @@ import {
   exportCVCalibrationCSV,
 } from "@/utils/csvExport";
 import { useWebSocketData, useChannelReconnect } from "@/hooks/useWebSocketData";
+import { useSweepCompletion, type SweepCompletionReason } from "@/hooks/useSweepCompletion";
 import ParametersPanel, {
   DEFAULT_EIS_PARAMS,
   DEFAULT_FET_PARAMS,
@@ -420,31 +421,21 @@ const Index = () => {
   const cvMultiSavedRef = useRef(false);
   const swvMultiSavedRef = useRef(false);
 
-  // Inactivity timers for completion when expected point count is wrong
-  const eisInactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fetInactivityRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the sweep ends on the device side (eis_done / fet_done, or the point
+  // count was reached) there is nothing left to stop. "stop" is sent to a live
+  // device only when the app gave up waiting for the "done" message.
+  const sendStopOnComplete = (reason?: SweepCompletionReason) => reason === "fallback";
 
-  const clearEisInactivity = () => {
-    if (eisInactivityRef.current) {
-      clearTimeout(eisInactivityRef.current);
-      eisInactivityRef.current = null;
-    }
-  };
-  const clearFetInactivity = () => {
-    if (fetInactivityRef.current) {
-      clearTimeout(fetInactivityRef.current);
-      fetInactivityRef.current = null;
-    }
-  };
-
-  // Shared EIS completion logic — used by both count-based and inactivity-based triggers.
+  // Shared EIS completion logic — used by the device-done, count-based and inactivity triggers.
   // NOTE: fitting is NOT run here. The user drags the separator then clicks "Fit Randles Circuit".
-  const completeEISSweep = (finalData: typeof eisData) => {
+  const completeEISSweep = (finalData: typeof eisData, reason?: SweepCompletionReason) => {
     if (eisAutoStopFiredRef.current) return;
     eisAutoStopFiredRef.current = true;
-    clearEisInactivity();
+    if (reason === "fallback") {
+      toast.warning("No completion message from the device for 3 minutes — closing the sweep with the points received so far.");
+    }
     if (isMulti) {
-      broadcastCommand("stop");
+      if (sendStopOnComplete(reason)) broadcastCommand("stop");
       saveChannelMeasurements("eis");
       setEisStatus("complete");
       toast.success("Multi-Channel EIS sweep complete — all channels saved.");
@@ -452,7 +443,7 @@ const Index = () => {
     }
     if (dataSource === "simulated") {
       eis.stop();
-    } else {
+    } else if (sendStopOnComplete(reason)) {
       ws.sendCommand("stop");
     }
     setFrozenEis(finalData);
@@ -788,17 +779,20 @@ const Index = () => {
     finalBaseline: typeof fetBaselineData,
     finalAnalyte: typeof fetAnalyteData,
     finalTime: typeof fetTimeDataArr,
+    reason?: SweepCompletionReason,
   ) => {
     if (fetAutoStopFiredRef.current) return;
     fetAutoStopFiredRef.current = true;
-    clearFetInactivity();
+    if (reason === "fallback") {
+      toast.warning("No completion message from the device for 3 minutes — closing the sweep with the points received so far.");
+    }
     if (isMulti) {
-      broadcastCommand("stop");
+      if (sendStopOnComplete(reason)) broadcastCommand("stop");
       saveChannelMeasurements("fet");
     } else if (dataSource === "simulated") {
       fetTransfer.stop();
       fetTime.stop();
-    } else {
+    } else if (sendStopOnComplete(reason)) {
       ws.sendCommand("stop");
     }
     setFrozenFetBaseline(finalBaseline);
@@ -1020,7 +1014,6 @@ const Index = () => {
 
   const handleResetEIS = () => {
     eisAutoStopFiredRef.current = false;
-    clearEisInactivity();
     setFrozenEis(null);
     setEisStatus("idle");
     setRandlesFit(null);
@@ -1110,7 +1103,6 @@ const Index = () => {
 
   const handleResetFET = () => {
     fetAutoStopFiredRef.current = false;
-    clearFetInactivity();
     setFrozenFetBaseline(null);
     setFrozenFetAnalyte(null);
     setFetStatus("idle");
@@ -1220,7 +1212,6 @@ const Index = () => {
   const handleStopEIS = () => {
     if (eisStatus !== "running") return;
     eisAutoStopFiredRef.current = true;
-    clearEisInactivity();
     if (isMulti) {
       broadcastCommand("stop");
       saveChannelMeasurements("eis");
@@ -1237,7 +1228,6 @@ const Index = () => {
   const handleStopFET = () => {
     if (fetStatus !== "running") return;
     fetAutoStopFiredRef.current = true;
-    clearFetInactivity();
     if (isMulti) {
       broadcastCommand("stop");
       saveChannelMeasurements("fet");
@@ -1253,48 +1243,73 @@ const Index = () => {
     toast(`Stopped at ${fetReceivedTotal} / ${expectedFetTotal} points`);
   };
 
-  // Auto-completion detection — EIS
+  // Device-side sweep state for live sources. Single live reads the one hook,
+  // Multi-Channel looks at every enabled channel that is still connected.
+  const isLive = dataSource !== "simulated";
+  const activeChannelHooks = isMulti
+    ? wsChannels.filter((_, i) => channels[i].enabled && wsChannels[i].status === "connected")
+    : [];
+  const eisDeviceRunning = isMulti
+    ? activeChannelHooks.some((c) => c.eisStatus === "running")
+    : dataSource === "live" && ws.eisStatus === "running";
+  const eisDeviceDone = isMulti
+    ? activeChannelHooks.length > 0 && activeChannelHooks.every((c) => c.eisStatus === "done")
+    : dataSource === "live" && ws.eisStatus === "done";
+  const fetDeviceRunning = isMulti
+    ? activeChannelHooks.some((c) => c.fetStatus === "running")
+    : dataSource === "live" && ws.fetStatus === "running";
+  const fetDeviceDone = isMulti
+    ? activeChannelHooks.length > 0 && activeChannelHooks.every((c) => c.fetStatus === "done")
+    : dataSource === "live" && ws.fetStatus === "done";
+  // In Multi-Channel the single `ws` hook is unused, so count the points on the channels.
+  const eisActivity = isMulti
+    ? wsChannels.reduce((n, c) => n + c.eisData.length, 0)
+    : eisData.length;
+  const fetActivity = isMulti
+    ? wsChannels.reduce((n, c) => n + c.fetBaseline.length + c.fetAnalyte.length + c.fetTimeData.length, 0)
+    : fetReceivedTotal;
+
+  // Auto-completion detection — EIS (point count). While a live device still
+  // reports "running" the count must not end the sweep, because points keep
+  // arriving until it sends eis_done.
   useEffect(() => {
     if (eisStatus !== "running") return;
     if (eisAutoStopFiredRef.current) return;
+    if (eisDeviceRunning) return;
     if (eisData.length >= expectedEisPoints && expectedEisPoints > 0) {
       completeEISSweep(eisData);
     }
-  }, [eisData, eisStatus, expectedEisPoints, dataSource, eis, ws]);
+  }, [eisData, eisStatus, expectedEisPoints, dataSource, eis, ws, eisDeviceRunning]);
 
-  // Inactivity-based completion — EIS (fires after 2s of no new points, once >=10 collected)
-  useEffect(() => {
-    if (eisStatus !== "running") {
-      clearEisInactivity();
-      return;
-    }
-    if (eisData.length < 10) return;
-    if (eisAutoStopFiredRef.current) return;
-    clearEisInactivity();
-    const snapshot = eisData;
-    eisInactivityRef.current = setTimeout(() => {
-      completeEISSweep(snapshot);
-    }, 2000);
-    return () => clearEisInactivity();
-  }, [eisData, eisStatus]);
+  // Completion by the device (live) or by inactivity (simulated 2 s, live 180 s fallback).
+  useSweepCompletion({
+    running: eisStatus === "running",
+    live: isLive,
+    ready: isLive ? eisActivity >= 1 : eisData.length >= 10,
+    activity: eisActivity,
+    deviceDone: eisDeviceDone,
+    onComplete: (reason) => completeEISSweep(eisData, reason),
+  });
 
   // Auto-completion detection — EIS (Multi-Channel: every enabled channel
   // must reach the expected point count on its own WebSocket).
   useEffect(() => {
     if (!isMulti || eisStatus !== "running") return;
     if (eisAutoStopFiredRef.current) return;
+    if (eisDeviceRunning) return;
     const active = channels.filter((c) => c.enabled);
     if (active.length === 0 || expectedEisPoints <= 0) return;
     const allDone = channels.every(
       (c, i) => !c.enabled || wsChannels[i].eisData.length >= expectedEisPoints,
     );
     if (allDone) completeEISSweep(eisData);
-  }, [channels, ws1.eisData, ws2.eisData, ws3.eisData, isMulti, eisStatus, expectedEisPoints]);
+  }, [channels, ws1.eisData, ws2.eisData, ws3.eisData, isMulti, eisStatus, expectedEisPoints, eisDeviceRunning]);
 
   // Auto-completion detection — BioFET (all 3 phases done)
   useEffect(() => {
     if (fetStatus !== "running") return;
     if (fetAutoStopFiredRef.current) return;
+    if (fetDeviceRunning) return;
     const baselineDone = fetBaselineData.length >= expectedFetTransferPoints;
     const analyteDone = fetAnalyteData.length >= expectedFetTransferPoints;
     const timeDone = fetTimeDataArr.length >= expectedFetTimePoints;
@@ -1313,31 +1328,27 @@ const Index = () => {
     fetTransfer,
     fetTime,
     ws,
+    fetDeviceRunning,
   ]);
 
-  // Inactivity-based completion — BioFET (2s after fetTimeDataArr stops growing, once >=5)
-  useEffect(() => {
-    if (fetStatus !== "running") {
-      clearFetInactivity();
-      return;
-    }
-    if (fetTimeDataArr.length < 5) return;
-    if (fetAutoStopFiredRef.current) return;
-    clearFetInactivity();
-    const b = fetBaselineData;
-    const a = fetAnalyteData;
-    const t = fetTimeDataArr;
-    fetInactivityRef.current = setTimeout(() => {
-      completeFETSweep(b, a, t);
-    }, 2000);
-    return () => clearFetInactivity();
-  }, [fetBaselineData, fetAnalyteData, fetTimeDataArr, fetStatus]);
+  // Completion by the device (live) or by inactivity — BioFET. Simulated: 2 s
+  // after the data stops growing, once the time response has >=5 points. Live:
+  // fet_done, with a 180 s fallback.
+  useSweepCompletion({
+    running: fetStatus === "running",
+    live: isLive,
+    ready: isLive ? fetActivity >= 1 : fetTimeDataArr.length >= 5,
+    activity: fetActivity,
+    deviceDone: fetDeviceDone,
+    onComplete: (reason) => completeFETSweep(fetBaselineData, fetAnalyteData, fetTimeDataArr, reason),
+  });
 
   // Auto-completion detection — BioFET (Multi-Channel: every enabled channel
   // must finish all 3 phases on its own WebSocket).
   useEffect(() => {
     if (!isMulti || fetStatus !== "running") return;
     if (fetAutoStopFiredRef.current) return;
+    if (fetDeviceRunning) return;
     const active = channels.filter((c) => c.enabled);
     if (active.length === 0) return;
     const allDone = channels.every((c, i) => {
@@ -1355,16 +1366,8 @@ const Index = () => {
     ws1.fetBaseline, ws1.fetAnalyte, ws1.fetTimeData,
     ws2.fetBaseline, ws2.fetAnalyte, ws2.fetTimeData,
     ws3.fetBaseline, ws3.fetAnalyte, ws3.fetTimeData,
-    isMulti, fetStatus, expectedFetTransferPoints, expectedFetTimePoints,
+    isMulti, fetStatus, expectedFetTransferPoints, expectedFetTimePoints, fetDeviceRunning,
   ]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      clearEisInactivity();
-      clearFetInactivity();
-    };
-  }, []);
 
   // Live CV — react to cv_done / cv_error from ESP32.
   useEffect(() => {
