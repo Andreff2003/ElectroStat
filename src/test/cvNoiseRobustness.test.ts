@@ -44,7 +44,11 @@ function sweep(ampUA: number, runs: number, baseline: "auto" | "none" = "auto") 
     const noisy = withNoise(basePts, ampUA, 1000 * ampUA + s);
     const m = computeCVMetrics(noisy, { scanRate_mVs: 100, n: 1, cMM, areaCm2: A, baselineMethodInput: baseline })!;
     snrs.push(m.SNR_cathodic);
-    errs.push(100 * Math.abs(Math.abs(m.IpcCorrected) - Math.abs(m0.IpcCorrected)) / Math.abs(m0.IpcCorrected));
+    // The error of the largest cathodic excursion, which is the peak current while a peak is
+    // found. Once the noise is so large that the peak no longer counts as detected (IpcCorrected
+    // is NaN then) it is still the number that shows how far the reading has drifted.
+    const reading = m.IpcExcursion ?? m.IpcCorrected;
+    errs.push(100 * Math.abs(Math.abs(reading) - Math.abs(m0.IpcCorrected)) / Math.abs(m0.IpcCorrected));
   }
   const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
   return { meanSNR: mean(snrs), meanErr: mean(errs) };

@@ -36,6 +36,15 @@ export interface CVMetrics {
   // Backward-compat aliases — equal to the corrected values
   Ipa: number;
   Ipc: number;
+  /**
+   * The largest baseline-corrected excursion on the anodic / cathodic branch,
+   * whether or not it counts as a peak (it is NaN only when the branch is too
+   * short). Used by the calibration, where a blank has no peak but still has a
+   * reading at the peak position. Everything else uses Ipa/Ipc, which are NaN
+   * for a peak that was not detected.
+   */
+  IpaExcursion?: number;
+  IpcExcursion?: number;
   // Peak potentials in V
   Epa: number;
   Epc: number;
@@ -73,6 +82,11 @@ export interface CVMetricsInput {
   cMM: number;
   areaCm2: number;
   baselineMethodInput?: BaselineMethodInput; // default "auto"
+  /**
+   * Minimum prominence (µA) for a peak, on top of the rule of 5× the noise.
+   * Default PEAK_MIN_PROMINENCE_UA.
+   */
+  minPeakProminence_uA?: number;
 }
 
 // Randles-Ševčík prefactor at 25 °C (0.4463 · F · sqrt(F/RT)) ≈ 268648.45
@@ -224,30 +238,152 @@ function noiseFromBranch(
 }
 
 /**
+ * What a candidate has to look like to count as a peak and not as noise, ripple
+ * or the tail of a charging transient.
+ *
+ * - Prominence: how far the candidate stands above the higher of the two
+ *   saddles that separate it from anything higher, on the smoothed,
+ *   baseline-corrected trace. It must be at least PEAK_MIN_PROMINENCE_SIGMA
+ *   times the point-to-point noise of that trace, and at least a minimum in µA
+ *   (configurable, default PEAK_MIN_PROMINENCE_UA).
+ * - Width: the candidate must stay above half its prominence over at least
+ *   PEAK_MIN_WIDTH_POINTS points and PEAK_MIN_WIDTH_MV. A reversible peak is
+ *   about 90/n mV wide at half height, so 20 mV leaves room for n up to 4,
+ *   while a spike of a few points on a flat capacitive plateau is rejected.
+ *
+ * On a flat capacitor trace with 1 to 5 µA of ripple the largest excursion used
+ * to be reported as a peak ("Epc -0.286 V, Peaks detected 1/2").
+ */
+export const PEAK_MIN_PROMINENCE_SIGMA = 5;
+export const PEAK_MIN_PROMINENCE_UA = 0.05;
+export const PEAK_MIN_WIDTH_POINTS = 4;
+export const PEAK_MIN_WIDTH_MV = 20;
+/**
+ * A feature that stays above half its prominence over more than this fraction of
+ * the branch is a curved baseline (the bow of a capacitive plateau, a drift),
+ * not a peak: a reversible peak is about 90/n mV wide on a branch of several
+ * hundred mV, a bow spans some 70 % of it.
+ */
+export const PEAK_MAX_WIDTH_FRACTION = 0.5;
+
+interface PeakCandidate {
+  /** Points on the branch the candidate was found on. */
+  branchLength: number;
+  Iraw: number;
+  Icorr: number;
+  E: number;
+  idx: number;
+  /** µA above the higher saddle, on the smoothed corrected trace (always >= 0). */
+  prominence: number;
+  /** Points, and mV, over which the trace stays above half the prominence. */
+  widthPoints: number;
+  widthMv: number;
+}
+
+/**
  * Find an extremum on a branch (max for "anodic", min for "cathodic"),
- * ignoring the outer 5 % of points so we don't pick the ramp endpoints.
+ * ignoring the outer 5 % of points so we don't pick the ramp endpoints, and
+ * measure how prominent and how wide it is.
  */
 function findPeak(
   branch: CVDataPoint[],
   baseline: ((E: number) => number) | null,
   kind: "anodic" | "cathodic",
-): { Iraw: number; Icorr: number; E: number; idx: number } | null {
+): PeakCandidate | null {
   if (branch.length < 5) return null;
   const sm = smooth(branch);
+  const sign = kind === "anodic" ? 1 : -1;
+  // y is the smoothed, baseline-corrected trace, flipped so that the peak is a maximum.
+  const y = sm.map((v, i) => sign * (baseline ? v - baseline(branch[i].E) : v));
   const edge = Math.max(1, Math.floor(branch.length * 0.05));
   let bestIdx = -1;
-  let bestVal = kind === "anodic" ? -Infinity : Infinity;
+  let bestVal = -Infinity;
   for (let i = edge; i < branch.length - edge; i++) {
-    const corr = baseline ? sm[i] - baseline(branch[i].E) : sm[i];
-    if (kind === "anodic" ? corr > bestVal : corr < bestVal) {
-      bestVal = corr;
+    if (y[i] > bestVal) {
+      bestVal = y[i];
       bestIdx = i;
     }
   }
   if (bestIdx < 0) return null;
   const Iraw = branch[bestIdx].I;
   const Icorr = baseline ? Iraw - baseline(branch[bestIdx].E) : Iraw;
-  return { Iraw, Icorr, E: branch[bestIdx].E, idx: bestIdx };
+
+  // Topographic prominence: walk each way until a higher point or the end of
+  // the branch, keeping the lowest value seen. The saddle is the higher of the two.
+  let leftMin = bestVal;
+  for (let i = bestIdx - 1; i >= 0 && y[i] <= bestVal; i--) leftMin = Math.min(leftMin, y[i]);
+  let rightMin = bestVal;
+  for (let i = bestIdx + 1; i < branch.length && y[i] <= bestVal; i++) rightMin = Math.min(rightMin, y[i]);
+  const prominence = Math.max(0, bestVal - Math.max(leftMin, rightMin));
+
+  // Width at half prominence: the contiguous stretch around the peak that stays above it.
+  const half = bestVal - prominence / 2;
+  let lo = bestIdx;
+  while (lo - 1 >= 0 && y[lo - 1] >= half) lo--;
+  let hi = bestIdx;
+  while (hi + 1 < branch.length && y[hi + 1] >= half) hi++;
+
+  return {
+    branchLength: branch.length,
+    Iraw,
+    Icorr,
+    E: branch[bestIdx].E,
+    idx: bestIdx,
+    prominence,
+    widthPoints: hi - lo + 1,
+    widthMv: Math.abs(branch[hi].E - branch[lo].E) * 1000,
+  };
+}
+
+/**
+ * Point-to-point noise of the baseline-corrected trace of a branch (µA): the
+ * robust sigma (1.4826·MAD) of the second differences, divided by sqrt(6), the
+ * factor for white noise. Second differences cancel a smooth wave, so a real
+ * peak does not inflate it, and few points are affected by a peak, so the MAD
+ * ignores them. Returns 0 when it cannot be estimated.
+ */
+function pointNoiseOfBranch(
+  branch: CVDataPoint[],
+  baseline: ((E: number) => number) | null,
+): number {
+  if (branch.length < 8) return 0;
+  const v = branch.map((p) => p.I - (baseline ? baseline(p.E) : 0));
+  const d2: number[] = [];
+  for (let i = 1; i < v.length - 1; i++) d2.push(v[i - 1] - 2 * v[i] + v[i + 1]);
+  const sorted = [...d2].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  const dev = d2.map((d) => Math.abs(d - med)).sort((a, b) => a - b);
+  const mad = dev[Math.floor(dev.length / 2)];
+  return (1.4826 * mad) / Math.sqrt(6);
+}
+
+/** Does the candidate stand out from the noise, and is it wide enough to be a peak? */
+function standsOut(
+  p: PeakCandidate | null,
+  sigma_uA: number,
+  minProminence_uA: number,
+): { ok: boolean; reason?: string } {
+  if (!p) return { ok: false };
+  const need = Math.max(PEAK_MIN_PROMINENCE_SIGMA * sigma_uA, minProminence_uA);
+  if (!(p.prominence >= need)) {
+    return {
+      ok: false,
+      reason: `prominence ${p.prominence.toFixed(2)} µA is below ${need.toFixed(2)} µA (${PEAK_MIN_PROMINENCE_SIGMA}× the noise)`,
+    };
+  }
+  if (p.widthPoints < PEAK_MIN_WIDTH_POINTS || p.widthMv < PEAK_MIN_WIDTH_MV) {
+    return {
+      ok: false,
+      reason: `width ${p.widthPoints} points / ${p.widthMv.toFixed(0)} mV is below ${PEAK_MIN_WIDTH_POINTS} points / ${PEAK_MIN_WIDTH_MV} mV`,
+    };
+  }
+  if (p.widthPoints > PEAK_MAX_WIDTH_FRACTION * p.branchLength) {
+    return {
+      ok: false,
+      reason: `it spans ${Math.round((100 * p.widthPoints) / p.branchLength)} % of the branch, which is a curved baseline and not a peak`,
+    };
+  }
+  return { ok: true };
 }
 
 export function computeCVMetrics(
@@ -371,20 +507,40 @@ export function computeCVMetrics(
     FIXED_PEAK_THRESHOLD_UA,
     3 * effectiveNoise_uA,
   );
-  const hasAnodic = anodic != null && anodic.Icorr > peakThreshold_uA;
-  const hasCathodic = cathodic != null && cathodic.Icorr < -peakThreshold_uA;
+  // A candidate has to be tall enough (above) and also stand out from the local
+  // baseline by a minimum prominence and be several points wide, or it is noise.
+  const minProminence_uA = input.minPeakProminence_uA ?? PEAK_MIN_PROMINENCE_UA;
+  const anodicSigma = Math.max(pointNoiseOfBranch(anodicBranch, anodicBase ?? null), effectiveNoise_uA);
+  const cathodicSigma = Math.max(pointNoiseOfBranch(cathodicBranch, cathodicBase ?? null), effectiveNoise_uA);
+  const anodicShape = standsOut(anodic, anodicSigma, minProminence_uA);
+  const cathodicShape = standsOut(cathodic, cathodicSigma, minProminence_uA);
+  const hasAnodic = anodic != null && anodic.Icorr > peakThreshold_uA && anodicShape.ok;
+  const hasCathodic = cathodic != null && cathodic.Icorr < -peakThreshold_uA && cathodicShape.ok;
   const SNR_anodic = anodic ? Math.abs(anodic.Icorr) / effectiveNoise_uA : 0;
   const SNR_cathodic = cathodic ? Math.abs(cathodic.Icorr) / effectiveNoise_uA : 0;
 
-  if (!hasAnodic) warnings.push("no clear anodic peak detected");
-  if (!hasCathodic) warnings.push("no clear cathodic peak detected");
+  if (!hasAnodic) {
+    const why = anodic != null && anodic.Icorr > peakThreshold_uA ? anodicShape.reason : undefined;
+    warnings.push(why ? `no clear anodic peak detected (${why})` : "no clear anodic peak detected");
+  }
+  if (!hasCathodic) {
+    const why = cathodic != null && cathodic.Icorr < -peakThreshold_uA ? cathodicShape.reason : undefined;
+    warnings.push(why ? `no clear cathodic peak detected (${why})` : "no clear cathodic peak detected");
+  }
 
-  const IpaRaw = anodic ? anodic.Iraw : NaN;
-  const IpcRaw = cathodic ? cathodic.Iraw : NaN;
-  const IpaCorrected = anodic ? anodic.Icorr : NaN;
-  const IpcCorrected = cathodic ? cathodic.Icorr : NaN;
-  const Epa = anodic ? anodic.E : NaN;
-  const Epc = cathodic ? cathodic.E : NaN;
+  // Only a peak that was detected is reported (and used for Ipa/Ipc, ΔEp, E0',
+  // the ratio, D and the quality verdict). The largest excursion of a trace
+  // with no peak in it is still kept apart, as IpaExcursion/IpcExcursion, for
+  // the calibration: a blank has no peak, and the calibration reads what is at
+  // the peak position there, as before (see buildCVCalibrationPoint).
+  const IpaExcursion = anodic ? anodic.Icorr : NaN;
+  const IpcExcursion = cathodic ? cathodic.Icorr : NaN;
+  const IpaRaw = hasAnodic && anodic ? anodic.Iraw : NaN;
+  const IpcRaw = hasCathodic && cathodic ? cathodic.Iraw : NaN;
+  const IpaCorrected = hasAnodic && anodic ? anodic.Icorr : NaN;
+  const IpcCorrected = hasCathodic && cathodic ? cathodic.Icorr : NaN;
+  const Epa = hasAnodic && anodic ? anodic.E : NaN;
+  const Epc = hasCathodic && cathodic ? cathodic.E : NaN;
   const deltaEp = hasAnodic && hasCathodic ? Math.abs(Epa - Epc) * 1000 : NaN;
   const E0prime = hasAnodic && hasCathodic ? (Epa + Epc) / 2 : NaN;
   const IpaIpcRatio =
@@ -563,6 +719,8 @@ export function computeCVMetrics(
     IpcCorrected,
     Ipa: IpaCorrected,
     Ipc: IpcCorrected,
+    IpaExcursion,
+    IpcExcursion,
     Epa,
     Epc,
     E0prime,

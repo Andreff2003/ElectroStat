@@ -55,9 +55,14 @@ export function buildCVCalibrationPoint(
   cvModel: "reversible" | "quasi-reversible",
   meta?: BuildCVCalibrationPointMeta,
 ): CVCalibrationPoint {
-  const Ipa = metrics && Number.isFinite(metrics.IpaCorrected) ? metrics.IpaCorrected : null;
-  const IpcAbs =
-    metrics && Number.isFinite(metrics.IpcCorrected) ? Math.abs(metrics.IpcCorrected) : null;
+  // The calibration reads the largest excursion at the peak position even when
+  // it did not qualify as a peak (a blank has none), so the blanks still give a
+  // reading to estimate the noise from. IpaCorrected is NaN for a peak that was
+  // not detected; the excursion is what was there instead.
+  const IpaRead = metrics ? (metrics.IpaExcursion ?? metrics.IpaCorrected) : NaN;
+  const IpcRead = metrics ? (metrics.IpcExcursion ?? metrics.IpcCorrected) : NaN;
+  const Ipa = Number.isFinite(IpaRead) ? IpaRead : null;
+  const IpcAbs = Number.isFinite(IpcRead) ? Math.abs(IpcRead) : null;
   const mean =
     Ipa != null && IpcAbs != null
       ? (Ipa + IpcAbs) / 2
