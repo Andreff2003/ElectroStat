@@ -212,6 +212,53 @@ describe("live EIS: device status from the WebSocket hook drives completion", ()
     expect(result.current.eisStatus).toBe("running");
   });
 
+  it("a stopped sweep: 'stopped' survives the 'idle' that follows, a new 'running' resets it", () => {
+    const { result, socket } = connectedHook();
+    act(() => { socket.emit({ type: "eis_status", status: "running" }); });
+    for (let i = 0; i < 4; i++) act(() => { socket.emit(eisFrame(i)); });
+    act(() => { socket.emit({ type: "eis_status", status: "stopped", points: 4 }); });
+    expect(result.current.eisStatus).toBe("stopped");
+    // the firmware (and bridge.py on a stop) send idle right after; it must not erase the end
+    act(() => { socket.emit({ type: "eis_status", status: "idle" }); });
+    expect(result.current.eisStatus).toBe("stopped");
+    expect(result.current.eisData).toHaveLength(4);        // the points already received are kept
+    act(() => { socket.emit({ type: "eis_status", status: "running" }); });
+    expect(result.current.eisStatus).toBe("running");
+    act(() => { socket.emit({ type: "eis_status", status: "stopped" }); });
+    act(() => { result.current.clearEIS(); });
+    expect(result.current.eisStatus).toBe("idle");
+  });
+
+  it("closes the sweep on 'stopped' with the points received, and sends nothing", () => {
+    const { result, socket } = connectedHook();
+    const onComplete = vi.fn<(r: SweepCompletionReason) => void>();
+    const { rerender } = renderHook(
+      ({ ws }: { ws: ReturnType<typeof useWebSocketData> }) =>
+        useSweepCompletion({
+          running: true,
+          live: true,
+          ready: ws.eisData.length >= 1,
+          activity: ws.eisData.length,
+          // the page treats "done" and "stopped" as the end of a sweep
+          deviceDone: ws.eisStatus === "done" || ws.eisStatus === "stopped",
+          onComplete,
+        }),
+      { initialProps: { ws: result.current } },
+    );
+    act(() => { socket.emit({ type: "eis_status", status: "running" }); });
+    for (let i = 0; i < 6; i++) {
+      act(() => { socket.emit(eisFrame(i)); });
+      rerender({ ws: result.current });
+      act(() => { vi.advanceTimersByTime(8000); });
+    }
+    expect(onComplete).not.toHaveBeenCalled();
+    act(() => { socket.emit({ type: "eis_status", status: "stopped", points: 6 }); });
+    act(() => { socket.emit({ type: "eis_status", status: "idle" }); });
+    rerender({ ws: result.current });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(result.current.eisData).toHaveLength(6);
+  });
+
   it("tracks fet_status and fet_done the same way", () => {
     const { result, socket } = connectedHook();
     act(() => { socket.emit({ type: "fet_status", status: "running" }); });

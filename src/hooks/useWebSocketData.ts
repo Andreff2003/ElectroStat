@@ -32,11 +32,23 @@ import type { SWVDataPoint } from "@/types/swv";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
-/** Sweep state as reported by the device (through the bridge). */
-export type SweepDeviceStatus = "idle" | "running" | "done" | "error";
+/**
+ * Sweep state as reported by the device (through the bridge). "stopped" is a
+ * sweep that ended because the app asked it to stop: the points already
+ * received are valid, and the device reports "idle" right after.
+ */
+export type SweepDeviceStatus = "idle" | "running" | "done" | "stopped" | "error";
 
 const isSweepDeviceStatus = (s: unknown): s is SweepDeviceStatus =>
-  s === "idle" || s === "running" || s === "done" || s === "error";
+  s === "idle" || s === "running" || s === "done" || s === "stopped" || s === "error";
+
+/**
+ * "idle" after "done" or "stopped" must not erase the end of the sweep: the
+ * firmware sends "stopped" and "idle" back to back, and the app may only get to
+ * render once. The next "running", or clearEIS()/clearFET(), resets it.
+ */
+const nextSweepStatus = (prev: SweepDeviceStatus, incoming: SweepDeviceStatus): SweepDeviceStatus =>
+  incoming === "idle" && (prev === "done" || prev === "stopped") ? prev : incoming;
 
 interface UseWebSocketDataReturn {
   // Connection
@@ -198,7 +210,10 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               break;
 
             case "eis_status":
-              if (isSweepDeviceStatus(msg.status)) setEisStatus(msg.status);
+              if (isSweepDeviceStatus(msg.status)) {
+                const s: SweepDeviceStatus = msg.status;
+                setEisStatus((prev) => nextSweepStatus(prev, s));
+              }
               break;
 
             case "fet_done":
@@ -206,7 +221,10 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               break;
 
             case "fet_status":
-              if (isSweepDeviceStatus(msg.status)) setFetStatus(msg.status);
+              if (isSweepDeviceStatus(msg.status)) {
+                const s: SweepDeviceStatus = msg.status;
+                setFetStatus((prev) => nextSweepStatus(prev, s));
+              }
               break;
 
             case "cv_data": {

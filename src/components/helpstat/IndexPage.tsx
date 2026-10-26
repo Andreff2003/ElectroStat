@@ -257,6 +257,9 @@ const Index = () => {
   // Sweep status tracks completion separately from "is running"
   const [eisStatus, setEisStatus] = useState<SweepStatus>("idle");
   const [fetStatus, setFetStatus] = useState<SweepStatus>("idle");
+  // Live EIS: Stop was pressed and the device has not confirmed yet. The
+  // firmware ends the sweep at the end of the current frequency point.
+  const [eisStopping, setEisStopping] = useState(false);
 
   // Frozen snapshots for Signal Quality after sweep completes / stops
   const [frozenEis, setFrozenEis] = useState<ReturnType<typeof useWebSocketData>["eisData"] | null>(null);
@@ -967,6 +970,7 @@ const Index = () => {
   const handleStartEIS = (concentrationOverride?: number) => {
     const conc = concentrationOverride ?? concentration;
     eisAutoStopFiredRef.current = false;
+    setEisStopping(false);
     setFrozenEis(null);
     setRandlesFit(null);
     setWarburg(null);
@@ -1014,6 +1018,7 @@ const Index = () => {
 
   const handleResetEIS = () => {
     eisAutoStopFiredRef.current = false;
+    setEisStopping(false);
     setFrozenEis(null);
     setEisStatus("idle");
     setRandlesFit(null);
@@ -1209,16 +1214,32 @@ const Index = () => {
   };
 
   // Manual stop (mid-sweep)
+  // Closes a live sweep that the user stopped, once the device has ended it.
+  const finalizeEisStop = () => {
+    eisAutoStopFiredRef.current = true;
+    setEisStopping(false);
+    setFrozenEis(eisData);
+    setEisStatus("stopped");
+    toast(`Stopped at ${eisData.length} / ${expectedEisPoints} points`);
+  };
+
   const handleStopEIS = () => {
-    if (eisStatus !== "running") return;
+    if (eisStatus !== "running" || eisStopping) return;
+    if (dataSource === "live") {
+      // The device ends the sweep after the frequency point in progress, which
+      // can take several seconds at low frequency. Keep the sweep open (points
+      // that still arrive are kept) until it reports "stopped" or "done".
+      ws.sendCommand("stop");
+      setEisStopping(true);
+      toast("Stopping… the sweep ends at the current frequency point.");
+      return;
+    }
     eisAutoStopFiredRef.current = true;
     if (isMulti) {
       broadcastCommand("stop");
       saveChannelMeasurements("eis");
-    } else if (dataSource === "simulated") {
-      eis.stop();
     } else {
-      ws.sendCommand("stop");
+      eis.stop();
     }
     setFrozenEis(eisData);
     setEisStatus("stopped");
@@ -1252,9 +1273,11 @@ const Index = () => {
   const eisDeviceRunning = isMulti
     ? activeChannelHooks.some((c) => c.eisStatus === "running")
     : dataSource === "live" && ws.eisStatus === "running";
+  // "stopped" is a normal end too: the points received so far are kept.
+  const eisEnded = (s: typeof ws.eisStatus) => s === "done" || s === "stopped";
   const eisDeviceDone = isMulti
-    ? activeChannelHooks.length > 0 && activeChannelHooks.every((c) => c.eisStatus === "done")
-    : dataSource === "live" && ws.eisStatus === "done";
+    ? activeChannelHooks.length > 0 && activeChannelHooks.every((c) => eisEnded(c.eisStatus))
+    : dataSource === "live" && eisEnded(ws.eisStatus);
   const fetDeviceRunning = isMulti
     ? activeChannelHooks.some((c) => c.fetStatus === "running")
     : dataSource === "live" && ws.fetStatus === "running";
@@ -1288,7 +1311,13 @@ const Index = () => {
     ready: isLive ? eisActivity >= 1 : eisData.length >= 10,
     activity: eisActivity,
     deviceDone: eisDeviceDone,
-    onComplete: (reason) => completeEISSweep(eisData, reason),
+    onComplete: (reason) => {
+      // After Stop the device's end (or the fallback) closes the sweep as
+      // "stopped", with no auto-fit and no stored measurement, like a stop in
+      // simulated mode.
+      if (eisStopping) finalizeEisStop();
+      else completeEISSweep(eisData, reason);
+    },
   });
 
   // Auto-completion detection — EIS (Multi-Channel: every enabled channel
@@ -1845,6 +1874,7 @@ const Index = () => {
     setFrozenFetBaseline(null);
     setFrozenFetAnalyte(null);
     eisAutoStopFiredRef.current = false;
+    setEisStopping(false);
     fetAutoStopFiredRef.current = false;
     if (source === "simulated" && ws.status === "connected") {
       ws.disconnect();
@@ -2156,7 +2186,7 @@ const Index = () => {
           {mode === "eis" && (
             <>
               <Button size="sm" onClick={() => handleStartEIS()} disabled={isEISRunning || demoRunning || liveNotReady} className="font-mono text-xs">▶ Start EIS</Button>
-              <Button size="sm" variant="destructive" onClick={handleStopEIS} disabled={!isEISRunning || demoRunning} className="font-mono text-xs">■ Stop</Button>
+              <Button size="sm" variant="destructive" onClick={handleStopEIS} disabled={!isEISRunning || demoRunning || eisStopping} className="font-mono text-xs">{eisStopping ? "Stopping…" : "■ Stop"}</Button>
               <Button size="sm" variant="secondary" onClick={handleResetEIS} disabled={demoRunning} className="font-mono text-xs">↺ Reset</Button>
               <Button size="sm" variant="outline" onClick={() => exportEISData(eisData, exportSource, {
                 notes: sanitizeMeasurementNotes(eisNotes),
