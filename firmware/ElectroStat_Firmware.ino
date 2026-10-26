@@ -157,10 +157,10 @@ uint32_t rtiaOhmsToSel(float ohms) {
   return best;
 }
 
-// Calibration resistor value in ohms — same default as the demo
-// sketch. Replace with the *measured* value of the resistor actually
-// populated on the board (see thesis: measure it with a DMM).
-static const float RCAL_OHMS = 1000.0f;
+// Calibration resistor value in ohms. The board now uses a 10 kOhm RCAL, as
+// in the original HELPStat; 9980 ohm is the value measured with a DMM, which
+// is what must be used here, not the nominal 10000.
+static const float RCAL_OHMS = 9980.0f;
 
 static bool eisSweepInProgress = false;
 
