@@ -158,7 +158,19 @@ const RAW_EIS_HEADERS = [
   "Z Imag (Ω)",
   "|Z| (Ω)",
   "Phase (°)",
+  // Raw-signal diagnostics. Every point is exported, flagged or not. The three
+  // numbers are N/A for simulated data and for data without them, and "Low
+  // signal" is No in those cases.
+  "DFT Cal (counts)",
+  "DFT Mag (counts)",
+  "RTIA (Ω)",
+  "Low signal",
 ];
+
+/** The four diagnostic cells of a raw EIS row, in the order of RAW_EIS_HEADERS. */
+function eisDiagnosticCells(p: EISDataPoint): string[] {
+  return [fmtNum(p.dftCal), fmtNum(p.dftMag), fmtNum(p.rtiaOhms), p.lowSignal === true ? "Yes" : "No"];
+}
 
 const RAW_FET_TRANSFER_HEADERS = [
   "Measurement ID",
@@ -295,6 +307,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
             fmtNum(p.zImag),
             fmtNum(p.zMag),
             fmtNum(p.phase),
+            ...eisDiagnosticCells(p),
           ]),
         );
       }
@@ -848,6 +861,7 @@ export function exportEISData(
     rawLines.push(toRow([
       id, NO_CHANNEL, ts, "eis", "N/A",
       fmtNum(p.frequency), fmtNum(p.zReal), fmtNum(p.zImag), fmtNum(p.zMag), fmtNum(p.phase),
+      ...eisDiagnosticCells(p),
     ]));
   }
   const out = [

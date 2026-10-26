@@ -998,6 +998,11 @@ void HELPStat::AD5940_DFTMeasure(void) {
   /* Finding the actual magnitude and phase */
   eis.magnitude = (magRcal / magRz) * _rcalVal; 
   eis.phaseRad = phaseRcal - phaseRz;
+  /* ElectroStat addition: the raw DFT magnitudes behind this point and the HSTIA gain in use,
+     so that a caller can tell a point with no usable signal (1 or 2 counts) from a good one. */
+  eis.dftCal = magRcal;
+  eis.dftMag = magRz;
+  eis.rtiaSel = _currentRtiaSel;
   eis.real = eis.magnitude * cos(eis.phaseRad);
   eis.imag = eis.magnitude * sin(eis.phaseRad) * -1; 
   eis.phaseDeg = eis.phaseRad * 180 / MATH_PI; 
@@ -2311,6 +2316,7 @@ AD5940Err HELPStat::setHSTIA(float freq) {
         hsdac_cfg.HsDacUpdateRate = 0x07;
         AD5940_HSDacCfgS(&hsdac_cfg);
         AD5940_HSRTIACfgS(_gainArr[i].rTIA);
+        _currentRtiaSel = _gainArr[i].rTIA; // ElectroStat addition — reported with each point
       __AD5940_SetDExRTIA(0, HSTIADERTIA_OPEN, HSTIADERLOAD_0R);
         
         // AD5940_HPModeEn(bTRUE);
@@ -2329,6 +2335,7 @@ AD5940Err HELPStat::setHSTIA(float freq) {
         hsdac_cfg.HsDacUpdateRate = 0x1B;
         AD5940_HSDacCfgS(&hsdac_cfg);
         AD5940_HSRTIACfgS(_gainArr[i].rTIA);
+        _currentRtiaSel = _gainArr[i].rTIA; // ElectroStat addition — reported with each point
       __AD5940_SetDExRTIA(0, HSTIADERTIA_OPEN, HSTIADERLOAD_0R);
 
         // AD5940_HPModeEn(bFALSE);

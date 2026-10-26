@@ -88,6 +88,20 @@ int main() {
     CHECK(off >= 5000u);                                    // leaves the settling time
   }
 
+  // -- EIS low signal: below kEisMinDftCounts (5) in either DFT magnitude --
+  {
+    CHECK(kEisMinDftCounts == 5.0f);
+    CHECK(eisLowSignal(4.0f, 80.0f));        // 4 counts in the RCAL: low
+    CHECK(eisLowSignal(8.0f, 4.0f));         // 4 counts in the cell: low
+    CHECK(!eisLowSignal(5.0f, 5.0f));        // 5 counts is enough
+    CHECK(!eisLowSignal(5.0f, 80.0f));
+    CHECK(eisLowSignal(1.0f, 1.0f));         // either low is enough, both too
+    CHECK(eisLowSignal(0.0f, 80.0f) && eisLowSignal(8.0f, 0.0f));
+    CHECK(eisLowSignal(NAN, 80.0f) && eisLowSignal(8.0f, NAN));   // an unknown count is not trusted
+    CHECK(!eisLowSignal(7.071f, 68.154f));   // the first valid point of the log
+    CHECK(eisLowSignal(8.062f, 1.0f));       // the 80 kOhm point of the log, from DFT Mag = 1
+  }
+
   // -- potential convention: E(WE vs RE) in, LPDAC bias out (the hardware gives
   //    E = Vzero - Vbias, so the bias is minus E), clamped to +-1100 mV --
   {

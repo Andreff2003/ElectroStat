@@ -5,21 +5,36 @@ import {
   Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea,
 } from "recharts";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
+import { splitForPlot, isLowSignal } from "@/utils/eisLowSignal";
+import { LowSignalFooter } from "@/components/LowSignalFooter";
 
 interface BodePlotProps {
   data: EISDataPoint[];
   overlays?: { label: string; color: string; data: EISDataPoint[] }[];
 
+  /** Draw the low-signal points (flagged by the firmware) as hollow grey markers. Controlled by the parent when given, else local. */
+  showLowSignal?: boolean;
+  onShowLowSignalChange?: (show: boolean) => void;
+
   /** Compact read-only rendering for the dashboard grid. */
   compact?: boolean;
 }
 
-const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
-  const plotData = data.map(d => ({
-    freq: d.frequency,
-    zMag: d.zMag,
-    phase: d.phase,
-  }));
+const LOW_SIGNAL_COLOR = "hsl(215 10% 60%)"; // grey
+
+const BodePlot = ({ data, overlays, showLowSignal, onShowLowSignalChange, compact = false }: BodePlotProps) => {
+  // Low-signal points are hidden unless the toggle is on, and the axes scale on
+  // the points that are drawn. When shown they get their own series, drawn as
+  // hollow grey markers with no line.
+  const [localShowLow, setLocalShowLow] = useState(false);
+  const showLow = !compact && (showLowSignal ?? localShowLow);
+  const setShowLow = onShowLowSignalChange ?? setLocalShowLow;
+  const split = splitForPlot(data, showLow);
+  const plotData = data
+    .filter((d) => !isLowSignal(d) || showLow)
+    .map(d => (isLowSignal(d)
+      ? { freq: d.frequency, zMagLow: d.zMag, phaseLow: d.phase }
+      : { freq: d.frequency, zMag: d.zMag, phase: d.phase }));
   const ovs = compact ? [] : (overlays ?? []).map((o) => ({
     ...o,
     data: o.data.map((d) => ({ freq: d.frequency, zMag: d.zMag, phase: d.phase })),
@@ -61,7 +76,7 @@ const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
   }
 
   return (
-    <div className="w-full h-full" style={{ position: "relative" }}>
+    <div className="w-full h-full flex flex-col" style={{ position: "relative" }}>
       {!compact && zoomDomain && (
         <button
           onClick={() => setZoomDomain(null)}
@@ -77,6 +92,7 @@ const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
           Reset Zoom
         </button>
       )}
+      <div className="flex-1 min-h-0">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={plotData}
@@ -134,8 +150,16 @@ const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
               label={{ value: "-45° (ω = 1/RctCdl)", fill: "hsl(35 90% 55%)", fontSize: 10, position: "insideTopRight" }}
             />
           )}
-          <Line yAxisId="left" type="monotone" dataKey="zMag" name="|Z| (Ω)" stroke="hsl(160 70% 50%)" strokeWidth={2} dot={false} isAnimationActive={false} />
-          <Line yAxisId="right" type="monotone" dataKey="phase" name="Phase (°)" stroke="hsl(35 90% 55%)" strokeWidth={2} dot={false} isAnimationActive={false} />
+          <Line yAxisId="left" type="monotone" dataKey="zMag" name="|Z| (Ω)" stroke="hsl(160 70% 50%)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+          <Line yAxisId="right" type="monotone" dataKey="phase" name="Phase (°)" stroke="hsl(35 90% 55%)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+          {split.low.length > 0 && (
+            <Line yAxisId="left" type="monotone" dataKey="zMagLow" name="Low signal |Z|" stroke="transparent" strokeWidth={0}
+              dot={{ r: 3, stroke: LOW_SIGNAL_COLOR, strokeWidth: 1.5, fill: "transparent" }} activeDot={false} isAnimationActive={false} />
+          )}
+          {split.low.length > 0 && (
+            <Line yAxisId="right" type="monotone" dataKey="phaseLow" name="Low signal φ" stroke="transparent" strokeWidth={0}
+              dot={{ r: 3, stroke: LOW_SIGNAL_COLOR, strokeWidth: 1.5, fill: "transparent" }} activeDot={false} isAnimationActive={false} />
+          )}
           {ovs.map((o, i) => [
             <Line
               key={`ov-mag-${i}`}
@@ -170,6 +194,8 @@ const BodePlot = ({ data, overlays, compact = false }: BodePlotProps) => {
           )}
         </LineChart>
       </ResponsiveContainer>
+      </div>
+      {!compact && split.lowCount > 0 && <LowSignalFooter split={split} show={showLow} onChange={setShowLow} />}
     </div>
   );
 };

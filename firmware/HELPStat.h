@@ -217,8 +217,14 @@ typedef struct _impStruct {
     float magnitude; 
     float phaseRad; 
     float real;
-    float imag; 
-    float phaseDeg; 
+    float imag;
+    float phaseDeg;
+    /* ElectroStat addition: the DFT magnitudes (in counts) of the RCAL and of the
+       cell measurement behind this point, and the HSTIA RTIA selector in use. Only
+       filled by AD5940_DFTMeasure(); Rz = dftCal / dftMag * RCAL. */
+    float dftCal;
+    float dftMag;
+    int rtiaSel;
 }impStruct;
 
 typedef struct _calHSTIA
@@ -256,6 +262,7 @@ class HELPStat {
         EisPointCallback _onEisPoint = nullptr;
         EisAbortCheck _abortCheck = nullptr;
         bool _aborted = false;
+        int _currentRtiaSel = -1; // HSTIA RTIA selector set by setHSTIA() for the point in progress
 
         class MyServerCallbacks: public BLEServerCallbacks { // BLE Callback (just says "Device Connected" or "Device Disconnected")
             void onConnect(BLEServer* pServer) {

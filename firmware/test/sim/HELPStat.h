@@ -13,7 +13,7 @@
 #define HSTIARTIA_160K 8
 #define CS_SD 5
 struct calHSTIA { float maxFreq; uint32_t rtia; };
-struct impStruct { float freq, real, imag, magnitude, phaseDeg; };
+struct impStruct { float freq, real, imag, magnitude, phaseDeg; float dftCal, dftMag; int rtiaSel; };
 typedef void (*EisPointCallback)(const impStruct &);
 typedef bool (*EisAbortCheck)(void);
 
@@ -28,6 +28,7 @@ extern float g_biasMv;
 extern int g_eis_points;
 extern uint32_t g_eis_us_per_point;
 extern int g_eis_nan_at;
+extern int g_eis_low_at;   // index of a finite point with 1 DFT count (-1 for none)
 extern int g_shutdowns;
 
 // The AD5941 identification registers; the real ones come from ad5940.h.
@@ -55,8 +56,10 @@ class HELPStat {
       sim_advance(g_eis_us_per_point);
       float nan = std::numeric_limits<float>::quiet_NaN();
       impStruct p = (i == g_eis_nan_at)
-          ? impStruct{1000.0f / (i + 1), nan, nan, std::numeric_limits<float>::infinity(), nan}
-          : impStruct{1000.0f / (i + 1), 1000.0f, -50.0f, 1001.0f, -2.9f};
+          ? impStruct{1000.0f / (i + 1), nan, nan, std::numeric_limits<float>::infinity(), nan, 7.0f, 0.0f, HSTIARTIA_200}
+          : (i == g_eis_low_at)
+          ? impStruct{1000.0f / (i + 1), 80000.0f, 9980.0f, 80600.0f, 7.0f, 8.0f, 1.0f, HSTIARTIA_200}
+          : impStruct{1000.0f / (i + 1), 1000.0f, -50.0f, 1001.0f, -2.9f, 8.0f, 80.0f, HSTIARTIA_200};
       if (_onPoint) _onPoint(p);
       if (_abortCheck && _abortCheck()) _aborted = true;
     }

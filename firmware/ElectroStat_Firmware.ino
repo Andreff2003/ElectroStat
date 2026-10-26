@@ -169,6 +169,19 @@ uint32_t rtiaOhmsToSel(float ohms) {
   return best;
 }
 
+// The inverse of rtiaOhmsToSel(): the RTIA resistance of a selector, or 0 if the
+// selector is not one of the 8 (for example -1, "not set").
+float rtiaSelToOhms(int sel) {
+  static const struct { float ohms; int sel; } table[] = {
+    {200.0f, HSTIARTIA_200}, {1000.0f, HSTIARTIA_1K}, {5000.0f, HSTIARTIA_5K},
+    {10000.0f, HSTIARTIA_10K}, {20000.0f, HSTIARTIA_20K}, {40000.0f, HSTIARTIA_40K},
+    {80000.0f, HSTIARTIA_80K}, {160000.0f, HSTIARTIA_160K},
+  };
+  for (unsigned i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+    if (table[i].sel == sel) return table[i].ohms;
+  return 0.0f;
+}
+
 // Calibration resistor value in ohms. This is the NOMINAL value of the 10 kOhm
 // RCAL that the board uses, as in the original HELPStat. It has not been
 // measured with a multimeter yet. Replace it with the measured value, because
@@ -453,6 +466,7 @@ static void finishStopped(const char *label) {
 // bridge.py's forward_esp32_message() reads for msg_type == "eis". ──
 static uint32_t eisPointsSent = 0;     // valid points delivered in the current sweep
 static uint32_t eisPointsSkipped = 0;  // points with no usable value (inf or NaN)
+static uint32_t eisPointsLowSignal = 0; // delivered points whose raw DFT signal is too small to mean anything
 
 // Called by HELPStat::runSweep() after every point and at the start of every
 // cycle: reads one waiting line and reports whether a "stop" has arrived. The
@@ -475,6 +489,16 @@ void onEisPoint(const impStruct &point) {
     return;
   }
   eisPointsSent++;
+  // A finite value can still be meaningless: with 1 or 2 DFT counts in the RCAL
+  // or in the cell measurement, Rz = DFT Cal / DFT Mag * RCAL is quantization
+  // noise (about 80 kOhm from DFT Mag = 1 on a 1 kOhm cell). Such points are
+  // kept and flagged, and the app decides what to show. See kEisMinDftCounts.
+  const bool lowSignal = estat::eisLowSignal(point.dftCal, point.dftMag);
+  if (lowSignal) {
+    eisPointsLowSignal++;
+    Serial.printf("[EIS] low signal at %.3f Hz (DFT Cal %.3f, DFT Mag %.3f)\n",
+                  point.freq, point.dftCal, point.dftMag);
+  }
   JsonDocument doc;
   doc["type"] = "eis";
   doc["zReal"] = point.real;
@@ -482,6 +506,10 @@ void onEisPoint(const impStruct &point) {
   doc["frequency"] = point.freq;
   doc["zMag"] = point.magnitude;
   doc["phase"] = point.phaseDeg;
+  doc["dftCal"] = point.dftCal;
+  doc["dftMag"] = point.dftMag;
+  doc["rtiaOhms"] = rtiaSelToOhms(point.rtiaSel);
+  doc["lowSignal"] = lowSignal;
   sendJson(doc);
 }
 
@@ -578,6 +606,7 @@ void handleStartEis(JsonDocument &cmd) {
   );
   eisPointsSent = 0;
   eisPointsSkipped = 0;
+  eisPointsLowSignal = 0;
   abortRequested = false;
   helpstat.runSweep(); // blocking; streams points via onEisPoint() and checks eisAbortCheck() between points
 
@@ -604,9 +633,9 @@ void handleStartEis(JsonDocument &cmd) {
     stopBackup();
     return;
   }
-  if (eisPointsSkipped > 0) {
-    Serial.printf("[EIS] WARNING: %u point(s) skipped, %u delivered\n",
-                  (unsigned)eisPointsSkipped, (unsigned)eisPointsSent);
+  if (eisPointsSkipped > 0 || eisPointsLowSignal > 0) {
+    Serial.printf("[EIS] WARNING: %u point(s) delivered, of which %u low signal, and %u skipped\n",
+                  (unsigned)eisPointsSent, (unsigned)eisPointsLowSignal, (unsigned)eisPointsSkipped);
   }
   {
     JsonDocument done;
@@ -614,6 +643,7 @@ void handleStartEis(JsonDocument &cmd) {
     done["points"] = eisPointsSent;       // delivered, not the requested count
     done["requested"] = points;
     done["skipped"] = eisPointsSkipped;
+    done["lowSignal"] = eisPointsLowSignal;  // delivered but flagged, among "points"
     sendJson(done);
   }
   {

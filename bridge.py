@@ -412,14 +412,24 @@ async def forward_esp32_message(data: Dict[str, Any], source: str = "ESP32"):
             zmag = math.sqrt(zr * zr + zimag_true * zimag_true)
         phase = phase_in if phase_in is not None else (math.atan2(zimag_true, zr) * 180.0 / math.pi)
 
-        await broadcast({
+        eis_msg = {
             "type": "eis",
             "zReal": round(zr, 6),
             "zImag": round(zimag_true, 6),
             "frequency": round(freq, 6),
             "zMag": round(zmag, 6),
             "phase": round(phase, 6),
-        })
+        }
+        # Raw-signal diagnostics sent by the firmware (absent in simulated and
+        # replayed data): the DFT magnitudes behind the point, the HSTIA RTIA in
+        # use, and whether the signal was too small to trust. Forwarded as they come.
+        for key in ("dftCal", "dftMag", "rtiaOhms"):
+            value = finite_float(data.get(key))
+            if value is not None:
+                eis_msg[key] = round(value, 6)
+        if "lowSignal" in data:
+            eis_msg["lowSignal"] = bool(data.get("lowSignal"))
+        await broadcast(eis_msg)
         return
 
     if msg_type == "fet_transfer" or mode == "FET":

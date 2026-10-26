@@ -5,6 +5,8 @@ import {
   Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea,
 } from "recharts";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
+import { splitForPlot, zRealExtent } from "@/utils/eisLowSignal";
+import { LowSignalFooter } from "@/components/LowSignalFooter";
 
 /**
  * NYQUIST PLOT — EIS visualization with manual semicircle/Warburg separator.
@@ -12,9 +14,16 @@ import type { EISDataPoint } from "@/hooks/useSimulatedData";
  * The separator is controlled by the parent (no automatic detection).
  * Points left of the separator are drawn teal (semicircle region);
  * points right are drawn amber (Warburg tail).
+ *
+ * Points the firmware flagged as low signal (a DFT of 1 or 2 counts, whose
+ * impedance is only quantization noise) are hidden by default, and the axis
+ * scale ignores them. A toggle under the plot draws them as hollow grey markers.
  */
 interface NyquistPlotProps {
   data: EISDataPoint[];
+  /** Draw the low-signal points as hollow grey markers. Controlled by the parent when given, else local. */
+  showLowSignal?: boolean;
+  onShowLowSignalChange?: (show: boolean) => void;
   fittedCurve?: { zReal: number; zImag: number; frequency?: number }[];
   overlays?: { label: string; color: string; data: EISDataPoint[] }[];
 
@@ -31,8 +40,12 @@ const SEMI_COLOR = "hsl(160 70% 55%)"; // teal
 const WARB_COLOR = "hsl(30 90% 60%)";  // amber
 const SEP_COLOR  = "#F59E0B";
 
+const LOW_SIGNAL_COLOR = "hsl(215 10% 60%)"; // grey
+
 const NyquistPlot = ({
-  data,
+  data: allData,
+  showLowSignal,
+  onShowLowSignalChange,
   fittedCurve,
   overlays,
   showSeparator = false,
@@ -42,15 +55,21 @@ const NyquistPlot = ({
 }: NyquistPlotProps) => {
   const ovs = compact ? [] : (overlays ?? []);
 
+  // Low-signal points: hidden unless the toggle is on (never in the compact
+  // dashboard cell). Everything below, including the axis scale and the
+  // separator, works on the points that are drawn normally.
+  const [localShowLow, setLocalShowLow] = useState(false);
+  const showLow = !compact && (showLowSignal ?? localShowLow);
+  const setShowLow = onShowLowSignalChange ?? setLocalShowLow;
+  const split = useMemo(() => splitForPlot(allData, showLow), [allData, showLow]);
+  const data = split.shown;
+  const lowPts = split.low.map(d => ({ x: d.zReal, y: -d.zImag }));
+
   const { minZ, maxZ } = useMemo(() => {
-    if (data.length === 0) return { minZ: 0, maxZ: 1 };
-    let mn = Infinity, mx = -Infinity;
-    for (const d of data) {
-      if (d.zReal < mn) mn = d.zReal;
-      if (d.zReal > mx) mx = d.zReal;
-    }
-    return { minZ: Math.floor(mn), maxZ: Math.ceil(mx) };
-  }, [data]);
+    const ext = zRealExtent(split);
+    if (!ext) return { minZ: 0, maxZ: 1 };
+    return { minZ: Math.floor(ext.min), maxZ: Math.ceil(ext.max) };
+  }, [split]);
 
   const sep = separatorZReal;
   const hasSep = !compact && showSeparator && sep != null;
@@ -105,7 +124,7 @@ const NyquistPlot = ({
 
   const { xDomain, yDomain } = useMemo(() => {
     const allPts = [
-      ...semiPts, ...warbPts, ...fitLine,
+      ...semiPts, ...warbPts, ...lowPts, ...fitLine,
       ...ovs.flatMap(o => o.data.map(d => ({ x: d.zReal, y: -d.zImag }))),
     ];
     if (allPts.length === 0) return { xDomain: [0, 1] as [number, number], yDomain: [0, 1] as [number, number] };
@@ -147,7 +166,7 @@ const NyquistPlot = ({
       xDomain: [xCenter - spanX / 2, xCenter + spanX / 2] as [number, number],
       yDomain: [yCenter - spanY / 2, yCenter + spanY / 2] as [number, number],
     };
-  }, [semiPts, warbPts, fitLine, ovs, compact, plotBox]);
+  }, [semiPts, warbPts, lowPts, fitLine, ovs, compact, plotBox]);
 
   const [zoomArea, setZoomArea] = useState<{ x1: number; x2: number } | null>(null);
   const [zoomDomain, setZoomDomain] = useState<{ x: [number, number]; y: [number, number] } | null>(null);
@@ -199,7 +218,7 @@ const NyquistPlot = ({
     const x1 = Math.min(zoomArea.x1, zoomArea.x2);
     const x2 = Math.max(zoomArea.x1, zoomArea.x2);
     if (Math.abs(x2 - x1) < 1e-6) { setZoomArea(null); return; }
-    const visible = data.filter((d) => d.zReal >= x1 && d.zReal <= x2);
+    const visible = [...data, ...split.low].filter((d) => d.zReal >= x1 && d.zReal <= x2);
     const ys = visible.map((d) => -d.zImag).filter((v) => Number.isFinite(v));
     if (ys.length === 0) { setZoomArea(null); return; }
     const yMin = Math.min(...ys);
@@ -209,7 +228,7 @@ const NyquistPlot = ({
     setZoomArea(null);
   };
 
-  if (data.length === 0 && ovs.length === 0) {
+  if (allData.length === 0 && ovs.length === 0) {
     return (
       <EmptyPlotState
         title="No EIS sweep yet"
@@ -319,6 +338,17 @@ const NyquistPlot = ({
                 name="Warburg tail"
               />
             )}
+            {lowPts.length > 0 && (
+              <Scatter
+                data={lowPts}
+                fill="transparent"
+                stroke={LOW_SIGNAL_COLOR}
+                strokeWidth={1.5}
+                r={3}
+                isAnimationActive={false}
+                name="Low signal"
+              />
+            )}
             {ovs.map((o, i) => (
               <Scatter
                 key={`ov-${i}-${o.label}`}
@@ -360,7 +390,7 @@ const NyquistPlot = ({
                 ifOverflow="extendDomain"
               />
             )}
-            {!compact && (ovs.length > 0 || hasSep) && (
+            {!compact && (ovs.length > 0 || hasSep || lowPts.length > 0) && (
               <Legend wrapperStyle={{ fontSize: 11, fontFamily: "monospace" }} />
             )}
             {!compact && isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
@@ -399,6 +429,8 @@ const NyquistPlot = ({
           />
         </div>
       )}
+
+      {!compact && split.lowCount > 0 && <LowSignalFooter split={split} show={showLow} onChange={setShowLow} />}
     </div>
   );
 };

@@ -21,6 +21,18 @@ export interface EISDataPoint {
   frequency: number;
   zMag: number;
   phase: number;
+  /**
+   * Live hardware only. The raw DFT magnitudes (counts) behind the point, the
+   * HSTIA RTIA in use, and whether the firmware found the signal too small to
+   * mean anything (a DFT of 1 or 2 counts gives an impedance that is only
+   * quantization noise). Absent in simulated data, in data replayed by the
+   * bridge and in sessions saved before these fields existed: all of those
+   * count as lowSignal = false.
+   */
+  dftCal?: number;
+  dftMag?: number;
+  rtiaOhms?: number;
+  lowSignal?: boolean;
 }
 
 export interface FETTransferPoint {

@@ -189,6 +189,22 @@ our discussion — Overlay is how you'd compare them either way.
   (typically a lost contact) gives inf or NaN, which JSON would carry as
   null. The point is skipped with a warning on Serial, and `eis_done`
   reports `points` (delivered), `requested` and `skipped`.
+- **EIS points with too little signal are flagged, not removed.**
+  HELPStat computes `Rz = DFT Cal / DFT Mag * RCAL`; with 1 or 2 counts in
+  either magnitude the result is quantization noise (about 80 kOhm from
+  `DFT Mag = 1` on a 1 kOhm cell). A point is `lowSignal` when `DFT Cal`
+  or `DFT Mag` is below `kEisMinDftCounts` = 5 (`ElectroStat_Timing.h`).
+  Every `eis` frame now also carries `dftCal`, `dftMag`, `rtiaOhms` (the
+  HSTIA RTIA in use) and `lowSignal`, the existing fields are unchanged,
+  Serial prints `[EIS] low signal at X Hz (DFT Cal a, DFT Mag b)`, and
+  `eis_done` adds `lowSignal` (how many of the delivered `points`).
+  `impStruct` gets `dftCal`, `dftMag` and `rtiaSel`, filled by
+  `AD5940_DFTMeasure()` (an ElectroStat addition). `bridge.py` forwards
+  the new fields, and the app hides flagged points in the Nyquist and Bode
+  plots unless "Show low-signal points" is on, with the axis scale ignoring
+  them. Exports carry every point with `DFT Cal (counts)`,
+  `DFT Mag (counts)`, `RTIA (Ω)` and `Low signal`. This is only a flag: the
+  fits still use all the points they are given.
 - **The quiet time is held at the start potential and is no longer
   capped at 2 s** (the app accepts 0 to 60 s).
 - **Bluetooth Low Energy and the microSD card interface are present on

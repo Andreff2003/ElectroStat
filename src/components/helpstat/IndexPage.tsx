@@ -260,6 +260,9 @@ const Index = () => {
   // Live EIS: Stop was pressed and the device has not confirmed yet. The
   // firmware ends the sweep at the end of the current frequency point.
   const [eisStopping, setEisStopping] = useState(false);
+  // One toggle for the Nyquist and the Bode plot: draw the points the firmware
+  // flagged as low signal (hidden by default).
+  const [showLowSignal, setShowLowSignal] = useState(false);
 
   // Frozen snapshots for Signal Quality after sweep completes / stops
   const [frozenEis, setFrozenEis] = useState<ReturnType<typeof useWebSocketData>["eisData"] | null>(null);
@@ -2426,6 +2429,8 @@ const Index = () => {
             <TabsContent value="nyquist" className="mt-0 h-[440px] md:h-[540px] overflow-visible">
               <NyquistPlot
                 data={eisData}
+                showLowSignal={showLowSignal}
+                onShowLowSignalChange={setShowLowSignal}
                 fittedCurve={cnlsFit?.fittedCurve ?? randlesFit?.fittedCurve}
                 overlays={overlayMode ? eisOverlays : []}
                 showSeparator={eisStatus === "complete" && separatorZReal != null}
@@ -2434,7 +2439,12 @@ const Index = () => {
               />
             </TabsContent>
             <TabsContent value="bode" className="mt-0 h-[400px] md:h-[500px]">
-              <BodePlot data={eisData} overlays={overlayMode ? eisOverlays : []} />
+              <BodePlot
+                data={eisData}
+                showLowSignal={showLowSignal}
+                onShowLowSignalChange={setShowLowSignal}
+                overlays={overlayMode ? eisOverlays : []}
+              />
             </TabsContent>
           </div>
 

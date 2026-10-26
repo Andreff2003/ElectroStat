@@ -171,7 +171,17 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               const phase = Number.isFinite(phaseRaw)
                 ? phaseRaw
                 : Math.atan2(zImag, zReal) * (180 / Math.PI);
-              setEisData((prev) => [...prev, { zReal, zImag, frequency, zMag, phase }]);
+              const point: EISDataPoint = { zReal, zImag, frequency, zMag, phase };
+              // Raw-signal diagnostics from the firmware (absent in simulated and replayed data).
+              const optNum = (v: unknown) => (v == null ? NaN : Number(v));
+              const dftCal = optNum(msg.dftCal);
+              const dftMag = optNum(msg.dftMag);
+              const rtiaOhms = optNum(msg.rtiaOhms);
+              if (Number.isFinite(dftCal)) point.dftCal = dftCal;
+              if (Number.isFinite(dftMag)) point.dftMag = dftMag;
+              if (Number.isFinite(rtiaOhms) && rtiaOhms > 0) point.rtiaOhms = rtiaOhms;
+              if (typeof msg.lowSignal === "boolean") point.lowSignal = msg.lowSignal;
+              setEisData((prev) => [...prev, point]);
               break;
             }
 

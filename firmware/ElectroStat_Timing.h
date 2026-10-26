@@ -134,6 +134,21 @@ inline float lpdacBiasMvFromE(float eMv) {
   return c == 0.0f ? 0.0f : -c;   // no negative zero
 }
 
+// ── EIS low-signal check ─────────────────────────────────────────
+// HELPStat computes Rz = (DFT Cal / DFT Mag) * RCAL, where the two magnitudes
+// are DFT results in counts. With 1 or 2 counts in either one the quantization
+// alone is 50 to 100 % of the value, so the impedance means nothing: a cell of
+// 1 kOhm gave about 80 kOhm from DFT Mag = 1, and once a point of 4.7 MOhm. At 5
+// counts the quantization is at most 20 %, and the points that carry a real
+// signal in the logs had 5 counts or more (DFT Cal 5.0 at the lowest, DFT Mag 48
+// or more), so 5 separates the two. A point below it is flagged, not removed.
+constexpr float kEisMinDftCounts = 5.0f;
+
+inline bool eisLowSignal(float dftCal, float dftMag) {
+  // written as a negation so that a NaN counts as low signal
+  return !(dftCal >= kEisMinDftCounts && dftMag >= kEisMinDftCounts);
+}
+
 // ── EIS excitation amplitude ─────────────────────────────────────
 // The sine that AD5940_TDD is told to generate is attenuated twice before it
 // reaches the cell: by the excitation buffer and by the HS DAC. AD5940_TDD takes

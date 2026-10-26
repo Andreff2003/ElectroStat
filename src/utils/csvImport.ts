@@ -247,6 +247,12 @@ function parseEISSection(section: SectionSlice): ImportedEIS {
   const iIm = findCol(headers, ["Z Imag (Ω)", "zImag"]);
   const iMag = findCol(headers, ["|Z| (Ω)", "zMag"]);
   const iPhase = findCol(headers, ["Phase (°)", "phase"]);
+  // Raw-signal diagnostics, written since the low-signal flag was added. Files
+  // from before it have none of these columns, and those points are not low signal.
+  const iDftCal = findCol(headers, ["DFT Cal (counts)", "dftCal"]);
+  const iDftMag = findCol(headers, ["DFT Mag (counts)", "dftMag"]);
+  const iRtia = findCol(headers, ["RTIA (Ω)", "rtiaOhms"]);
+  const iLow = findCol(headers, ["Low signal", "lowSignal"]);
 
   const entries: { id: string; concentration: number | null; channelLabel?: string; point: EISDataPoint }[] = [];
   let skipped = 0;
@@ -263,11 +269,19 @@ function parseEISSection(section: SectionSlice): ImportedEIS {
     if (!Number.isFinite(zMag)) zMag = Math.hypot(zReal, zImag);
     if (!Number.isFinite(phase)) phase = (Math.atan2(zImag, zReal) * 180) / Math.PI;
     const concRaw = iConc >= 0 ? parseNum(r[iConc]) : NaN;
+    const point: EISDataPoint = { frequency, zReal, zImag, zMag, phase };
+    const dftCal = iDftCal >= 0 ? parseNum(r[iDftCal]) : NaN;
+    const dftMag = iDftMag >= 0 ? parseNum(r[iDftMag]) : NaN;
+    const rtia = iRtia >= 0 ? parseNum(r[iRtia]) : NaN;
+    if (Number.isFinite(dftCal)) point.dftCal = dftCal;
+    if (Number.isFinite(dftMag)) point.dftMag = dftMag;
+    if (Number.isFinite(rtia)) point.rtiaOhms = rtia;
+    if (iLow >= 0 && (r[iLow] ?? "").trim().toLowerCase() === "yes") point.lowSignal = true;
     entries.push({
       id: readId(r, iId),
       concentration: Number.isFinite(concRaw) ? concRaw : null,
       channelLabel: readChannel(r, iCh),
-      point: { frequency, zReal, zImag, zMag, phase },
+      point,
     });
   }
   return { mode: "eis", measurements: groupByMeasurement(entries), skipped };

@@ -25,6 +25,7 @@ float g_biasMv = 0;
 int g_eis_points = 35;
 uint32_t g_eis_us_per_point = 2000000;
 int g_eis_nan_at = -1;
+int g_eis_low_at = -1;
 int g_shutdowns = 0;
 
 void sim_advance(uint64_t us) { g_clock_us += us; }
@@ -79,6 +80,7 @@ static void reset(uint32_t epoch = 0, uint32_t serialUsPerByte = 0, uint32_t jit
   g_eis_points = 35;
   g_eis_us_per_point = 2000000;
   g_eis_nan_at = -1;
+  g_eis_low_at = -1;
   g_shutdowns = 0;
   eisSweepInProgress = false;
 }
@@ -370,6 +372,39 @@ int main() {
       CHECK(done->doc["requested"].as<int>() == 10);
       CHECK(done->doc["skipped"].as<int>() == 1);
     }
+  }
+
+  std::printf("T14b EIS: a finite point with 1 DFT count is kept, flagged and counted\n");
+  reset();
+  g_eis_points = 10;
+  g_eis_low_at = 3;
+  run("{\"command\":\"start_eis\",\"freqMin\":1,\"freqMax\":100000,\"points\":10,\"amplitude\":10,\"dcBias\":0}");
+  {
+    auto msgs = parse();
+    int n = 0, low = 0;
+    for (auto &m : msgs) {
+      if (m.type != "eis") continue;
+      n++;
+      CHECK(!m.doc["dftCal"].isNull() && !m.doc["dftMag"].isNull() && !m.doc["rtiaOhms"].isNull() && !m.doc["lowSignal"].isNull(),
+            "an eis frame is missing a new field");
+      CHECK(std::fabs(m.doc["rtiaOhms"].as<double>() - 200.0) < 1e-6);
+      if (m.doc["lowSignal"].as<bool>()) {
+        low++;
+        CHECK(std::fabs(m.doc["dftMag"].as<double>() - 1.0) < 1e-6);
+      } else {
+        CHECK(std::fabs(m.doc["dftMag"].as<double>() - 80.0) < 1e-6 && std::fabs(m.doc["dftCal"].as<double>() - 8.0) < 1e-6);
+      }
+    }
+    CHECK(n == 10, "the low-signal point must still be sent, got %d", n);
+    CHECK(low == 1, "flagged %d points", low);
+    auto *done = findType(msgs, "eis_done");
+    CHECK(done != nullptr);
+    if (done) {
+      CHECK(done->doc["points"].as<int>() == 10 && done->doc["skipped"].as<int>() == 0 && done->doc["lowSignal"].as<int>() == 1);
+    }
+    bool logged = false;
+    for (auto &l : g_logs) if (l.find("[EIS] low signal at") != std::string::npos && l.find("DFT Mag 1.000") != std::string::npos) logged = true;
+    CHECK(logged);
   }
 
   std::printf("T15 EIS: an amplitude above 40 mV is clamped and reported\n");
