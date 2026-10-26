@@ -27,6 +27,10 @@ uint32_t g_eis_us_per_point = 2000000;
 int g_eis_nan_at = -1;
 int g_eis_low_at = -1;
 int g_shutdowns = 0;
+bool g_afe_on = false;
+int g_afe_off_calls = 0;
+int g_afe_misuse = 0;
+uint64_t g_afe_off_at = 0;
 
 void sim_advance(uint64_t us) { g_clock_us += us; }
 void SerialClass::println(const String &str) { sim_advance((uint64_t)usPerByte * (str.length() + 2)); }
@@ -83,6 +87,9 @@ static void reset(uint32_t epoch = 0, uint32_t serialUsPerByte = 0, uint32_t jit
   g_eis_low_at = -1;
   g_shutdowns = 0;
   eisSweepInProgress = false;
+  g_afe_on = false;
+  g_afe_off_calls = 0;
+  g_afe_misuse = 0;
 }
 
 struct Msg {
@@ -493,6 +500,79 @@ int main() {
   reset();
   run(FET_DEFAULT);
   CHECK(g_reads.size() > 3 && std::fabs(g_reads[3].biasMv - (-500.0)) < 1e-3, "first gate read at %.1f mV", g_reads.size() > 3 ? g_reads[3].biasMv : 0.0);
+
+  // The cell is not left polarized after CV, SWV or BioFET, whatever the way out.
+  auto offLogs = []() {
+    int n = 0;
+    for (auto &l : g_logs) if (l.find("[AFE] cell disconnected, AFE powered down") != std::string::npos) n++;
+    return n;
+  };
+  auto checkOff = [&](const char *what) {
+    CHECK(g_afe_off_calls == 1, "%s: AFE shut down %d time(s)", what, g_afe_off_calls);
+    CHECK(!g_afe_on, "%s: the AFE is still on", what);
+    CHECK(offLogs() == 1, "%s: the message was printed %d time(s)", what, offLogs());
+    CHECK(g_afe_misuse == 0, "%s: %d bias or read call(s) with the AFE off", what, g_afe_misuse);
+  };
+
+  std::printf("T20 the AFE is powered down at the end of every CV, SWV and BioFET run\n");
+  reset();
+  run(CV_DEFAULT);
+  checkOff("CV, normal end");
+  {
+    // before the done message and before the points are flushed, so the cell is not
+    // left polarized while the results are being sent
+    auto msgs = parse();
+    auto *done = findType(msgs, "cv_done");
+    CHECK(done != nullptr && g_afe_off_at <= done->atUs, "the shutdown must come before cv_done");
+  }
+  reset();
+  run(SWV_DEFAULT);
+  checkOff("SWV, normal end");
+  reset();
+  run(FET_DEFAULT);
+  checkOff("BioFET, normal end");
+
+  std::printf("    ...on stop, in the middle of the sweep and during the quiet time\n");
+  reset();
+  tcpClient.incoming.push_back({3000000u, "{\"command\":\"stop\"}"});
+  run(CV_DEFAULT);
+  checkOff("CV, stopped");
+  reset();
+  Serial.incoming.push_back({1000000u, "{\"command\":\"stop\"}"});
+  run(SWV_DEFAULT);                     // 2 s quiet time: the stop arrives during it
+  checkOff("SWV, stopped in the quiet time");
+  reset();
+  tcpClient.incoming.push_back({20000000u, "{\"command\":\"stop\"}"});
+  run(FET_DEFAULT);
+  checkOff("BioFET, stopped");
+
+  std::printf("    ...on error, after the AFE was set up\n");
+  reset();
+  run("{\"command\":\"start_cv\",\"eStart\":0.6,\"eVertex1\":-0.2,\"eVertex2\":0.6,\"nCycles\":1,\"stepMv\":2,\"scanRate\":500,\"quietTime\":0,\"rtiaOhms\":10000}");
+  CHECK(findType(parse(), "cv_error") != nullptr);
+  checkOff("CV, scan rate refused");
+  reset();
+  run("{\"command\":\"start_swv\",\"startE\":-0.2,\"endE\":0.6,\"step_mV\":2,\"amplitude_mV\":25,\"frequency_Hz\":100,\"quietTime_s\":0,\"direction\":\"anodic\",\"rtiaOhms\":10000}");
+  CHECK(findType(parse(), "swv_error") != nullptr);
+  checkOff("SWV, frequency refused");
+  reset();
+  run("{\"command\":\"start_fet\",\"vgMin\":-0.5,\"vgMax\":1.5,\"vgStep\":0.04,\"intervalMs\":2,\"concentration\":0,\"readoutBias_V\":1.0,\"timeDuration_s\":60,\"timeStep_s\":0.5,\"rtiaOhms\":10000}");
+  CHECK(findType(parse(), "fet_error") != nullptr);
+  checkOff("BioFET, interval refused");
+
+  std::printf("    ...a refused command (no AFE set up) does not shut anything down, and the next run initializes again\n");
+  reset();
+  run("{\"command\":\"start_cv\",\"stepMv\":0,\"scanRate\":100}");
+  CHECK(findType(parse(), "cv_error") != nullptr);
+  CHECK(g_afe_off_calls == 0 && offLogs() == 0, "nothing was on, so nothing is switched off");
+  reset();
+  run(CV_DEFAULT);
+  checkOff("CV after a stop");
+  checkCvOnSchedule(100.0, 801);        // the whole sweep still runs on schedule after a shutdown
+  reset();
+  run(SWV_DEFAULT);                     // CV, then SWV, back to back: each sets the AFE up itself
+  checkOff("SWV after a CV");
+  CHECK(parse("swv_data").size() == 401);
 
   std::printf("\n%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;

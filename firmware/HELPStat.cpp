@@ -3138,6 +3138,19 @@ float HELPStat::AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange) {
   return (diffVolt / rtiaOhms) * 1.0e6f;
 }
 
+void HELPStat::AD5940_AmperometryShutDown(void) {
+  // Disconnect CE0, RE0 and SE0 from the loops first, so that nothing is left driving
+  // the cell, then power everything down (the LP loop and the references explicitly,
+  // the HS blocks through hibernate). The EIS path ends with the same AD5940_ShutDownS().
+  SWMatrixCfg_Type sw_cfg;
+  sw_cfg.Dswitch = SWD_OPEN;
+  sw_cfg.Pswitch = SWP_OPEN;
+  sw_cfg.Nswitch = SWN_OPEN;
+  sw_cfg.Tswitch = SWT_OPEN;
+  AD5940_SWMatrixCfgS(&sw_cfg);
+  AD5940_ShutDownS();
+}
+
 float HELPStat::AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange, uint16_t settleMs) {
   AD5940_AmperometrySetBias(biasMillivolts);
   // Settling delay before sampling — empirical starting point, not

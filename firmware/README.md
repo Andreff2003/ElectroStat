@@ -129,6 +129,20 @@ our discussion — Overlay is how you'd compare them either way.
   "return"), so for 0 -> -0.5 -> +0.5 V at 2 mV one cycle is 1001 points.
   Before, the last cycle stopped at vertex 2 (751 points) and the app,
   which counts the return, expected about 1000.
+- **The cell is left unpolarized after CV, SWV and BioFET.** The AFE used
+  to stay on, and the cell at the last applied potential, until the next
+  command (EIS already ended with `AD5940_ShutDownS()`). With a real
+  electrode in solution that keeps electrolysing and can damage the
+  surface. Now, in every way out of a CV, SWV or BioFET run (normal end,
+  `stop`, a refused scan rate, frequency or interval, an ADC error), the
+  firmware calls `AD5940_AmperometryShutDown()` (an ElectroStat addition to
+  `HELPStat.cpp`): it opens the switch matrix, so CE0, RE0 and SE0 are
+  disconnected, powers the LP loop (the LPDAC that holds the bias) and the
+  references down, and hibernates the AFE. This happens as soon as the
+  sweep ends, before the remaining points are sent, and prints
+  `[AFE] cell disconnected, AFE powered down`. The next run initializes
+  again by itself: `AD5940_AmperometrySetup()` resets and initializes the
+  AFE. Not tested on the board.
 - **`RCAL_OHMS` is the nominal 10 kOhm and has not been measured.**
   Every EIS impedance scales with it (`Z = DFT Cal / DFT Mag * RCAL`), so
   replace it with the value measured with a multimeter.

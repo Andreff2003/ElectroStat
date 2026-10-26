@@ -497,6 +497,14 @@ class HELPStat {
         /** SetBias + delay(settleMs) + Read, as before (settleMs defaults to
          *  the original 5 ms). Kept for callers that do not need timing. */
         float AD5940_AmperometryStep(float biasMillivolts, float rtiaOhms, bool *outOfRange = nullptr, uint16_t settleMs = 5);
+
+        /* ElectroStat addition — leaves the cell unpolarized after an amperometric
+           run (CV, SWV, BioFET): opens the switch matrix so that CE0, RE0 and SE0 are
+           disconnected, powers the LP loop (the LPDAC that holds the bias) and the
+           references down, and hibernates the AFE, as AD5940_ShutDownS() does at the
+           end of an EIS sweep. The next AD5940_AmperometrySetup() resets and
+           initializes the AFE again, so nothing else is needed to start the next run. */
+        void AD5940_AmperometryShutDown(void);
 };
 
 #endif

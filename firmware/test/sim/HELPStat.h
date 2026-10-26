@@ -30,6 +30,11 @@ extern uint32_t g_eis_us_per_point;
 extern int g_eis_nan_at;
 extern int g_eis_low_at;   // index of a finite point with 1 DFT count (-1 for none)
 extern int g_shutdowns;
+// Amperometric AFE state: on after AD5940_AmperometrySetup(), off after AD5940_AmperometryShutDown().
+extern bool g_afe_on;
+extern int g_afe_off_calls;
+extern int g_afe_misuse;       // a bias set or a read done while the AFE was off
+extern uint64_t g_afe_off_at;  // virtual time of the last shutdown
 
 // The AD5941 identification registers; the real ones come from ad5940.h.
 inline void AD5940_HWReset() {}
@@ -68,9 +73,11 @@ class HELPStat {
   EisPointCallback _onPoint = nullptr;
   EisAbortCheck _abortCheck = nullptr;
   bool _aborted = false;
-  void AD5940_AmperometrySetup(uint32_t) { sim_advance(20000); }
-  void AD5940_AmperometrySetBias(float mv) { sim_advance(g_spi_us); g_biasMv = mv; }
+  void AD5940_AmperometrySetup(uint32_t) { sim_advance(20000); g_afe_on = true; }
+  void AD5940_AmperometryShutDown() { sim_advance(300); g_afe_on = false; g_afe_off_calls++; g_afe_off_at = g_clock_us; }
+  void AD5940_AmperometrySetBias(float mv) { if (!g_afe_on) g_afe_misuse++; sim_advance(g_spi_us); g_biasMv = mv; }
   float AD5940_AmperometryRead(float rtiaOhms, bool *outOfRange = nullptr) {
+    if (!g_afe_on) g_afe_misuse++;
     sim_advance(g_read_us);
     g_reads.push_back({micros(), g_biasMv});
     if (outOfRange) *outOfRange = false;

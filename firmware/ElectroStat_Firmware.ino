@@ -436,6 +436,29 @@ static uint32_t calibrateReadUs(float biasMv, float rtiaOhms) {
   return slowest;
 }
 
+// Leaves the cell unpolarized: disconnects CE0, RE0 and SE0, powers the AFE down.
+// After a CV, SWV or BioFET run the AFE used to stay on and the cell at the last
+// applied potential until the next command, which on a real electrode in solution
+// keeps electrolysing. EIS already ended with AD5940_ShutDownS().
+static void afeCellOff() {
+  helpstat.AD5940_AmperometryShutDown();
+  Serial.printf("[AFE] cell disconnected, AFE powered down\n");
+}
+
+// Put one of these in a handler right after AD5940_AmperometrySetup(): whichever way
+// the handler returns (refused scan rate, ADC error, stop, normal end), the cell is
+// switched off on the way out. off() does it at once, for the end of the sweep, so the
+// cell is not left polarized while the points are still being sent.
+struct AfeOffGuard {
+  bool done = false;
+  void off() {
+    if (done) return;
+    done = true;
+    afeCellOff();
+  }
+  ~AfeOffGuard() { off(); }
+};
+
 static void sendSweepError(const char *type, const char *message) {
   JsonDocument err;
   err["type"] = type;
@@ -758,6 +781,7 @@ void handleStartCv(JsonDocument &cmd) {
   // Plan the schedule before announcing "running": measure how long one read
   // takes on this board and check that a step's slot can hold it.
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(cvRtiaOhms));
+  AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(eStart * 1000.0f), cvRtiaOhms);
   if (readUs == 0) {
     sendSweepError("cv_error", "the ADC did not answer during the read-time check");
@@ -815,6 +839,7 @@ void handleStartCv(JsonDocument &cmd) {
   }
 
   cvSweepInProgress = false;
+  afeGuard.off();   // the sweep is over, stopped or not: do not leave the cell polarized
   if (abortRequested) {
     finishStopped("CV");
     return;
@@ -955,6 +980,7 @@ void handleStartFet(JsonDocument &cmd) {
   // Decide this again, and add the conversion here if needed, when a device
   // is wired.
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(fetRtiaOhms));
+  AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(vgMin * 1000.0f, fetRtiaOhms);
   if (readUs == 0) {
     sendSweepError("fet_error", "the ADC did not answer during the read-time check");
@@ -1051,6 +1077,7 @@ void handleStartFet(JsonDocument &cmd) {
   }
 
   fetSweepInProgress = false;
+  afeGuard.off();   // the sweep is over, stopped or not: do not leave the cell polarized
   if (!ok || abortRequested) {
     finishStopped("FET");
     return;
@@ -1168,6 +1195,7 @@ void handleStartSwv(JsonDocument &cmd) {
 
   // Plan the schedule before announcing "running" (see handleStartCv).
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(swvRtiaOhms));
+  AfeOffGuard afeGuard;   // the cell is switched off however this handler returns
   uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(startE * 1000.0f), swvRtiaOhms);
   if (readUs == 0) {
     sendSweepError("swv_error", "the ADC did not answer during the read-time check");
@@ -1243,6 +1271,7 @@ void handleStartSwv(JsonDocument &cmd) {
   }
 
   swvSweepInProgress = false;
+  afeGuard.off();   // the sweep is over, stopped or not: do not leave the cell polarized
   if (!ok || abortRequested) {
     finishStopped("SWV");
     return;
