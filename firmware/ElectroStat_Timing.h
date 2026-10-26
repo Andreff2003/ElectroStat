@@ -114,6 +114,50 @@ struct SweepStats {
   }
 };
 
+// ── EIS excitation amplitude ─────────────────────────────────────
+// The sine that AD5940_TDD is told to generate is attenuated twice before it
+// reaches the cell: by the excitation buffer and by the HS DAC. AD5940_TDD takes
+// the two gains as the selector values of ad5940.h, where
+//   EXCITBUFGAIN_2 = 0 (x2)     EXCITBUFGAIN_0P25 = 1 (x0.25)
+//   HSDACGAIN_1    = 0 (x1)     HSDACGAIN_0P2     = 1 (x0.2)
+// so with selectors 1 and 1 the cell sees generator * 0.25 * 0.2 = generator / 20.
+// The app asks for the amplitude AT THE CELL, so the generator amplitude is that
+// divided by both gains. The generator itself tops out at 800 mV
+// (SinAmplitudeWord = amplitude / 800 * 2047).
+constexpr int   kEisExtGainSel = 1;        // EXCITBUFGAIN_0P25
+constexpr int   kEisDacGainSel = 1;        // HSDACGAIN_0P2
+constexpr float kEisGeneratorMaxMv = 800.0f;
+
+inline float excitBufGainFactor(int sel) { return sel == 1 ? 0.25f : 2.0f; }
+inline float hsDacGainFactor(int sel)    { return sel == 1 ? 0.2f : 1.0f; }
+
+struct EisAmplitude {
+  float generatorMv;   // what to give AD5940_TDD as amplitudeMv
+  float cellMv;        // what the cell receives (the requested value, unless clamped)
+  float extGain;       // factors actually applied, for logging
+  float dacGain;
+  bool clamped;        // the request exceeded what the generator can deliver
+};
+
+// Largest amplitude the cell can receive with the given gain selectors.
+inline float eisCellMaxMv(int extGainSel, int dacGainSel) {
+  return kEisGeneratorMaxMv * excitBufGainFactor(extGainSel) * hsDacGainFactor(dacGainSel);
+}
+
+// `requestedCellMv` must be > 0 (callers reject anything else). A request above
+// eisCellMaxMv() is clamped to it.
+inline EisAmplitude eisAmplitude(float requestedCellMv, int extGainSel, int dacGainSel) {
+  EisAmplitude a;
+  a.extGain = excitBufGainFactor(extGainSel);
+  a.dacGain = hsDacGainFactor(dacGainSel);
+  const float attenuation = a.extGain * a.dacGain;
+  a.generatorMv = requestedCellMv / attenuation;
+  a.clamped = a.generatorMv > kEisGeneratorMaxMv;
+  if (a.clamped) a.generatorMv = kEisGeneratorMaxMv;
+  a.cellMv = a.generatorMv * attenuation;
+  return a;
+}
+
 }  // namespace estat
 
 // A sweep point waiting in the outbox (see ElectroStat_Firmware.ino). Declared

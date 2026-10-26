@@ -24,8 +24,14 @@
       UNTESTED against real hardware — this is a first pass written
       against the library's own demo sketch and source, not verified
       on a board. The app's "Amplitude" field (cmd["amplitude"], mV) is
-      now wired through to AD5940_TDD's sine generator (previously
-      fixed at the library's hardcoded 200 mV regardless of request).
+      the excitation at the cell. It is converted to the amplitude of
+      AD5940_TDD's sine generator by dividing by the two attenuations in
+      the path (excitation buffer x0.25, HS DAC x0.2, 20x in total), so
+      10 mV at the cell is a 200 mV generator amplitude, the value the
+      original HELPStat firmware used. The cell amplitude is limited to
+      40 mV (generator limit 800 mV): a larger request is clamped and
+      reported ("amplitudeClamped" in the eis_status "running" message).
+      See estat::eisAmplitude in ElectroStat_Timing.h.
     - CV: implemented as NEW code (there was no CV in the original
       HELPStat library to reuse), built on a new "amperometric step"
       primitive in HELPStat.h/.cpp — see the ElectroStat addition
@@ -462,13 +468,12 @@ void handleStartEis(JsonDocument &cmd) {
   // Vzero reference) — convert here, once, so nobody has to remember it.
   float dcBiasVolts = cmd["dcBias"] | 0.0f;
   float biasMillivolts = dcBiasVolts * 1000.0f;
-  float amplitudeMv = cmd["amplitude"] | 10.0f;
-  if (amplitudeMv <= 0 || amplitudeMv > 800.0f) {
-    Serial.printf("[EIS] WARNING: requested amplitude %.1f mV is outside the "
-                  "~0-800 mV peak-to-peak range AD5940_TDD's sine generator "
-                  "supports (SinAmplitudeWord = amplitudeMv/800*2047) — the "
-                  "excitation will clip or invert.\n", amplitudeMv);
-  }
+  // The app's amplitude is the excitation AT THE CELL. AD5940_TDD takes the
+  // amplitude of the waveform generator, which the excitation buffer and the
+  // HS DAC attenuate (x0.25 and x0.2 with the gains below, so 20x in total):
+  // passing the app's value straight through would put 1/20 of it on the cell.
+  // See estat::eisAmplitude in ElectroStat_Timing.h (tested on a PC).
+  const float requestedMv = cmd["amplitude"] | 10.0f;
 
   if (freqMin <= 0 || freqMax <= 0 || freqMin == freqMax) {
     JsonDocument err;
@@ -478,6 +483,24 @@ void handleStartEis(JsonDocument &cmd) {
     sendJson(err);
     return;
   }
+  if (!(requestedMv > 0.0f)) {
+    JsonDocument err;
+    err["type"] = "eis_status";
+    err["status"] = "error";
+    err["message"] = "amplitude must be positive";
+    sendJson(err);
+    return;
+  }
+
+  const estat::EisAmplitude amp =
+      estat::eisAmplitude(requestedMv, estat::kEisExtGainSel, estat::kEisDacGainSel);
+  if (amp.clamped) {
+    Serial.printf("[EIS] WARNING: requested amplitude %.1f mV at the cell exceeds the "
+                  "%.1f mV this board can apply (generator limit %.0f mV, gains x%g and x%g) "
+                  "— clamped to %.1f mV.\n",
+                  requestedMv, estat::eisCellMaxMv(estat::kEisExtGainSel, estat::kEisDacGainSel),
+                  estat::kEisGeneratorMaxMv, amp.dacGain, amp.extGain, amp.cellMv);
+  }
 
   // HELPStat::AD5940_TDD's "numPoints" is points PER DECADE, not a
   // total point count (see AD5940ImpedanceStructInit / the SweepPoints
@@ -486,8 +509,10 @@ void handleStartEis(JsonDocument &cmd) {
   float decades = fabs(log10(freqMax) - log10(freqMin));
   int pointsPerDecade = max(1, (int)round(points / max(decades, 0.01f)));
 
-  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) bias=%.1fmV amplitude=%.1fmVpp\n",
-                freqMin, freqMax, points, pointsPerDecade, biasMillivolts, amplitudeMv);
+  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) bias=%.1fmV\n",
+                freqMin, freqMax, points, pointsPerDecade, biasMillivolts);
+  Serial.printf("[EIS] requested %.1f mV at the cell -> generator %.1f mV (gains x%g, x%g)\n",
+                requestedMv, amp.generatorMv, amp.dacGain, amp.extGain);
 
   eisSweepInProgress = true;
   startBackup("eis");
@@ -495,6 +520,8 @@ void handleStartEis(JsonDocument &cmd) {
     JsonDocument status;
     status["type"] = "eis_status";
     status["status"] = "running";
+    status["amplitude"] = amp.cellMv;          // mV at the cell, after any clamp
+    status["amplitudeClamped"] = amp.clamped;
     sendJson(status);
   }
 
@@ -503,8 +530,8 @@ void handleStartEis(JsonDocument &cmd) {
     freqMax, freqMin, pointsPerDecade,
     biasMillivolts, /*zeroVolt=*/0.0f, RCAL_OHMS,
     gainTable, gainTableSize,
-    /*extGain=*/1, /*dacGain=*/1,
-    amplitudeMv
+    estat::kEisExtGainSel, estat::kEisDacGainSel,
+    amp.generatorMv
   );
   helpstat.runSweep(); // blocking; streams points via onEisPoint() as it runs
 

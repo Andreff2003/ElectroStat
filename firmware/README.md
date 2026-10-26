@@ -103,6 +103,24 @@ our discussion — Overlay is how you'd compare them either way.
 
 ## Known gaps / next steps
 
+- **EIS amplitude: the app's value is the excitation at the cell.** The
+  waveform generator that `AD5940_TDD` programs is attenuated by the
+  excitation buffer (x0.25) and the HS DAC (x0.2) before the cell, 20x in
+  total, so the firmware gives the generator `amplitude / (0.25 * 0.2)`
+  (10 mV at the cell is a 200 mV generator amplitude, the value the
+  original HELPStat firmware used). The generator tops out at 800 mV, so
+  the cell amplitude is limited to **40 mV**: a larger request is clamped,
+  a warning is printed on Serial, and the `eis_status` "running" message
+  carries `amplitude` (applied, in mV) and `amplitudeClamped`. Serial also
+  shows `requested 10.0 mV at the cell -> generator 200.0 mV` at the start
+  of each sweep. The conversion is `estat::eisAmplitude` in
+  `ElectroStat_Timing.h`, derived from the same gain selectors passed to
+  `AD5940_TDD`, and is tested on a PC. The other places in
+  `HELPStat.cpp` that set `SinAmplitudeWord` are not reached by this
+  firmware: the argument-less `AD5940_TDD(gainArr, size)` uses a fixed
+  200 mV generator amplitude with the default gains (10 mV at the cell,
+  so it never had this problem), and `AD5940_BiasCfg` sets up a bias with
+  its own gains. Neither is called by `ElectroStat_Firmware.ino`.
 - **CV's applied-potential range is limited to roughly ±1.1 V**, set by
   the LPDAC bias path `AD5940_AmperometryStep()` uses (same range the
   original library's own bias code supports). A CV sweep asking for

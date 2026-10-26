@@ -5,7 +5,8 @@ not check the AD5941, its settling, its real read time or any analog behavior;
 that needs the board (see "First bring-up with the board" in `../README.md`).
 
 - `timing_test.cpp` tests `ElectroStat_Timing.h` (deadlines without drift, the
-  micros() rollover, slot planning, the statistics).
+  micros() rollover, slot planning, the statistics, and the conversion of the EIS
+  amplitude from mV at the cell to the generator amplitude, with its 40 mV limit).
   `python -m ziglang c++ -std=c++17 -I.. timing_test.cpp -o timing_test && ./timing_test`
 - `sim/` compiles the real `ElectroStat_Firmware.ino` against stand-ins for the
   Arduino API and the AD5941 driver that only cost virtual time, and runs CV, SWV

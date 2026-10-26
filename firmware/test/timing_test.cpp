@@ -109,6 +109,39 @@ int main() {
   CHECK(periodFromScanRate(2.0f, 1.0e9f) >= 1u);
   CHECK(periodFromScanRate(50.0f, 0.001f) == 2000000000u);
 
+  // -- EIS excitation: the app asks for mV at the cell, the generator is told
+  //    mV before the two attenuations (excitation buffer x0.25, HS DAC x0.2) --
+  {
+    auto near = [](float a, float b) { return std::fabs(a - b) < 1e-3f; };
+    // the selectors the firmware passes to AD5940_TDD stand for x0.25 and x0.2
+    CHECK(near(excitBufGainFactor(kEisExtGainSel), 0.25f));
+    CHECK(near(hsDacGainFactor(kEisDacGainSel), 0.2f));
+    CHECK(near(eisCellMaxMv(kEisExtGainSel, kEisDacGainSel), 40.0f));
+
+    EisAmplitude a = eisAmplitude(10.0f, kEisExtGainSel, kEisDacGainSel);   // the default
+    CHECK(near(a.generatorMv, 200.0f));       // the 200 mV the original HELPStat firmware used
+    CHECK(near(a.cellMv, 10.0f));
+    CHECK(!a.clamped);
+
+    a = eisAmplitude(40.0f, kEisExtGainSel, kEisDacGainSel);                // the limit
+    CHECK(near(a.generatorMv, 800.0f));
+    CHECK(near(a.cellMv, 40.0f));
+    CHECK(!a.clamped);
+
+    a = eisAmplitude(50.0f, kEisExtGainSel, kEisDacGainSel);                // above the limit
+    CHECK(a.clamped);
+    CHECK(near(a.generatorMv, 800.0f));       // never above the generator's range
+    CHECK(near(a.cellMv, 40.0f));             // the amplitude actually applied
+
+    a = eisAmplitude(200.0f, kEisExtGainSel, kEisDacGainSel);               // the app's old maximum
+    CHECK(a.clamped && near(a.cellMv, 40.0f));
+
+    // changing the gains keeps the conversion right: x2 buffer and x1 DAC (selectors 0, 0)
+    a = eisAmplitude(10.0f, 0, 0);
+    CHECK(near(a.generatorMv, 5.0f));
+    CHECK(near(eisCellMaxMv(0, 0), 1600.0f));
+  }
+
   if (failures == 0) std::printf("timing_test: all checks passed\n");
   return failures == 0 ? 0 : 1;
 }
