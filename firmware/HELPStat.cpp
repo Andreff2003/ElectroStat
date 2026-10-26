@@ -39,6 +39,15 @@ void HELPStat::setEisPointCallback(EisPointCallback cb) {
     _onEisPoint = cb;
 }
 
+/* ElectroStat addition — see EisAbortCheck in HELPStat.h. */
+void HELPStat::setEisAbortCheck(EisAbortCheck cb) {
+    _abortCheck = cb;
+}
+
+bool HELPStat::eisSweepAborted(void) const {
+    return _aborted;
+}
+
 AD5940Err HELPStat::AD5940Start(void) {
     uint32_t err = AD5940_MCUResourceInit();
     if(err != 0) return AD5940ERR_ERROR;
@@ -1079,6 +1088,7 @@ void HELPStat::runSweep(void) {
     Need to not run the program if ArraySize < total points 
     TO DO: ADD A CHECK HERE  
   */
+  _aborted = false; // ElectroStat addition — see EisAbortCheck in HELPStat.h
   printf("Total points to run: %d\n", (_numCycles + 1) * _sweepCfg.SweepPoints); // since 0 based indexing, add 1
   printf("Set array size: %d\n", ARRAY_SIZE);
   printf("Calibration resistor value: %f\n", _rcalVal);
@@ -1091,7 +1101,13 @@ void HELPStat::runSweep(void) {
       Wakeup AFE by read register, read 10 times at most.
       Do this because AD594x goes to sleep after each cycle. 
     */
-    AD5940_SleepKeyCtrlS(SLPKEY_LOCK); // Disables Sleep Mode 
+    /* ElectroStat addition: a stop that arrived between cycles ends the run here. */
+    if (_abortCheck && _abortCheck()) {
+      _aborted = true;
+      printf("EIS sweep aborted at point %d\n", _sweepCfg.SweepIndex);
+      break;
+    }
+    AD5940_SleepKeyCtrlS(SLPKEY_LOCK); // Disables Sleep Mode
     if(_delaySecs)
     {
       unsigned long prevTime = millis();
@@ -1126,6 +1142,13 @@ void HELPStat::runSweep(void) {
     {
       AD5940_DFTMeasure();
       // AD5940_DFTMeasureEIS();
+      /* ElectroStat addition: check for a stop after each point. The point was
+         measured and delivered by the callback, so only the next one is skipped. */
+      if (_abortCheck && _abortCheck()) {
+        _aborted = true;
+        printf("EIS sweep aborted at point %d\n", _sweepCfg.SweepIndex);
+        break;
+      }
       AD5940_AFECtrlS(AFECTRL_HSTIAPWR|AFECTRL_INAMPPWR|AFECTRL_EXTBUFPWR|\
               AFECTRL_WG|AFECTRL_DACREFPWR|AFECTRL_HSDACPWR|\
               AFECTRL_SINC2NOTCH, bTRUE);
@@ -1134,6 +1157,7 @@ void HELPStat::runSweep(void) {
 
     unsigned long timeEnd = millis(); 
     printf("Time spent running Cycle %d (seconds): %lu\n", i, (timeEnd-timeStart)/1000);
+    if (_aborted) break; // ElectroStat addition — the shutdown below still runs
   }
   
   /* Shutdown to conserve power. This turns off the LP-Loop and resets the AFE. */
@@ -1152,6 +1176,7 @@ void HELPStat::runSweep(uint32_t numCycles, uint32_t delaySecs) {
     Need to not run the program if ArraySize < total points 
     TO DO: ADD A CHECK HERE  
   */
+  _aborted = false; // ElectroStat addition — see EisAbortCheck in HELPStat.h
   printf("Total points to run: %d\n", (_numCycles + 1) * _sweepCfg.SweepPoints); // since 0 based indexing, add 1
   printf("Set array size: %d\n", ARRAY_SIZE);
   printf("Calibration resistor value: %f\n", _rcalVal);
@@ -1164,7 +1189,13 @@ void HELPStat::runSweep(uint32_t numCycles, uint32_t delaySecs) {
       Wakeup AFE by read register, read 10 times at most.
       Do this because AD594x goes to sleep after each cycle. 
     */
-    AD5940_SleepKeyCtrlS(SLPKEY_LOCK); // Disables Sleep Mode 
+    /* ElectroStat addition: a stop that arrived between cycles ends the run here. */
+    if (_abortCheck && _abortCheck()) {
+      _aborted = true;
+      printf("EIS sweep aborted at point %d\n", _sweepCfg.SweepIndex);
+      break;
+    }
+    AD5940_SleepKeyCtrlS(SLPKEY_LOCK); // Disables Sleep Mode
     if(delaySecs)
     {
       unsigned long prevTime = millis();
@@ -1199,6 +1230,13 @@ void HELPStat::runSweep(uint32_t numCycles, uint32_t delaySecs) {
     {
       AD5940_DFTMeasure();
       // AD5940_DFTMeasureEIS();
+      /* ElectroStat addition: check for a stop after each point. The point was
+         measured and delivered by the callback, so only the next one is skipped. */
+      if (_abortCheck && _abortCheck()) {
+        _aborted = true;
+        printf("EIS sweep aborted at point %d\n", _sweepCfg.SweepIndex);
+        break;
+      }
       AD5940_AFECtrlS(AFECTRL_HSTIAPWR|AFECTRL_INAMPPWR|AFECTRL_EXTBUFPWR|\
               AFECTRL_WG|AFECTRL_DACREFPWR|AFECTRL_HSDACPWR|\
               AFECTRL_SINC2NOTCH, bTRUE);
@@ -1207,6 +1245,7 @@ void HELPStat::runSweep(uint32_t numCycles, uint32_t delaySecs) {
 
     unsigned long timeEnd = millis(); 
     printf("Time spent running Cycle %d (seconds): %lu\n", i, (timeEnd-timeStart)/1000);
+    if (_aborted) break; // ElectroStat addition — the shutdown below still runs
   }
   
   /* Shutdown to conserve power. This turns off the LP-Loop and resets the AFE. */

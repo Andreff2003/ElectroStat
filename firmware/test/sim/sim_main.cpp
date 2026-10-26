@@ -22,6 +22,10 @@ std::vector<ReadLog> g_reads;
 uint32_t g_spi_us = 150;
 uint32_t g_read_us = 3500;
 float g_biasMv = 0;
+int g_eis_points = 35;
+uint32_t g_eis_us_per_point = 2000000;
+int g_eis_nan_at = -1;
+int g_shutdowns = 0;
 
 void sim_advance(uint64_t us) { g_clock_us += us; }
 void SerialClass::println(const String &str) { sim_advance((uint64_t)usPerByte * (str.length() + 2)); }
@@ -72,6 +76,11 @@ static void reset(uint32_t epoch = 0, uint32_t serialUsPerByte = 0, uint32_t jit
   outboxHead = outboxCount = 0;
   abortRequested = false;
   sweepActive = false;
+  g_eis_points = 35;
+  g_eis_us_per_point = 2000000;
+  g_eis_nan_at = -1;
+  g_shutdowns = 0;
+  eisSweepInProgress = false;
 }
 
 struct Msg {
@@ -254,6 +263,139 @@ int main() {
       std::printf("      lateCount=%d maxLagUs=%d achieved=%.0f mV/s\n", done->doc["lateCount"].as<int>(),
                   done->doc["maxLagUs"].as<int>(), done->doc["achievedScanRate_mVs"].as<double>());
     }
+  }
+
+  static const char *EIS_DEFAULT = "{\"command\":\"start_eis\",\"freqMin\":1,\"freqMax\":100000,\"points\":35,\"amplitude\":10,\"dcBias\":0}";
+
+  std::printf("T10 EIS: 35 points, 2 s each, runs to the end and reports done\n");
+  reset();
+  run(EIS_DEFAULT);
+  {
+    auto msgs = parse();
+    auto pts = parse("eis");   // also matches eis_status / eis_done, filter by exact type below
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    auto *done = findType(msgs, "eis_done");
+    CHECK(n == 35, "got %d points", n);
+    CHECK(done != nullptr);
+    if (done) {
+      CHECK(done->doc["points"].as<int>() == 35);
+      CHECK(done->doc["requested"].as<int>() == 35);
+      CHECK(done->doc["skipped"].as<int>() == 0);
+    }
+    CHECK(lastStatus(msgs, "eis_status") == "done");
+    CHECK(g_shutdowns == 1 && !eisSweepInProgress);
+    auto *running = findType(msgs, "eis_status");
+    CHECK(running && std::fabs(running->doc["amplitude"].as<double>() - 10.0) < 1e-3);
+    CHECK(running && running->doc["amplitudeClamped"].as<bool>() == false);
+  }
+
+  std::printf("T11 EIS: a stop 7 s in ends the sweep after the point in progress, then a new sweep starts\n");
+  reset();
+  tcpClient.incoming.push_back({7000000u, "{\"command\":\"stop\"}"});
+  run(EIS_DEFAULT);
+  {
+    auto msgs = parse();
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    CHECK(n == 4, "delivered %d points (points land at 2, 4, 6 and 8 s, the stop is seen after the 4th)", n);
+    CHECK(findType(msgs, "eis_done") == nullptr);
+    bool sawStopped = false;
+    for (auto &m : msgs) if (m.type == "eis_status" && std::string((const char *)(m.doc["status"] | "")) == "stopped") sawStopped = true;
+    CHECK(sawStopped);
+    CHECK(lastStatus(msgs, "eis_status") == "idle");
+    CHECK(g_shutdowns == 1, "the AFE shutdown path ran %d time(s)", g_shutdowns);
+    CHECK(!eisSweepInProgress && !abortRequested);
+    double latency = (double)g_clock_us / 1e6 - 7.0;
+    CHECK(latency <= 2.0 + 1e-6, "stopped %.3f s after the command (one point takes 2 s here)", latency);
+  }
+  std::printf("    ...and the next sweep is not refused and is not aborted by the old stop\n");
+  g_sent.clear();
+  g_shutdowns = 0;
+  run(EIS_DEFAULT);
+  {
+    auto msgs = parse();
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    CHECK(n == 35, "got %d points", n);
+    CHECK(findType(msgs, "eis_done") != nullptr);
+    CHECK(findType(msgs, "eis_status") && std::string(findType(msgs, "eis_status")->doc["status"].as<const char *>()) == "running");
+  }
+
+  std::printf("T12 EIS: a stop that arrives before the first point ends the sweep with no points\n");
+  reset();
+  Serial.incoming.push_back({0u, "{\"command\":\"stop\"}"});
+  run(EIS_DEFAULT);
+  {
+    auto msgs = parse();
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    CHECK(n == 0, "got %d points", n);
+    CHECK(findType(msgs, "eis_done") == nullptr);
+    CHECK(lastStatus(msgs, "eis_status") == "idle");
+    CHECK(g_shutdowns == 1 && !eisSweepInProgress);
+  }
+
+  std::printf("T13 EIS: another command during the sweep is ignored and the sweep goes on\n");
+  reset();
+  tcpClient.incoming.push_back({3000000u, CV_DEFAULT});
+  run(EIS_DEFAULT);
+  {
+    auto msgs = parse();
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    CHECK(n == 35, "got %d points", n);
+    CHECK(findType(msgs, "eis_done") != nullptr);
+    CHECK(findType(msgs, "cv_data") == nullptr);
+    bool ignored = false;
+    for (auto &l : g_logs) if (l.find("start_cv ignored: a sweep is running") != std::string::npos) ignored = true;
+    CHECK(ignored);
+  }
+
+  std::printf("T14 EIS: a point that comes back as inf or NaN is skipped and counted, not sent as null\n");
+  reset();
+  g_eis_points = 10;
+  g_eis_nan_at = 4;
+  run("{\"command\":\"start_eis\",\"freqMin\":1,\"freqMax\":100000,\"points\":10,\"amplitude\":10,\"dcBias\":0}");
+  {
+    auto msgs = parse();
+    int n = 0;
+    for (auto &m : msgs) if (m.type == "eis") n++;
+    CHECK(n == 9, "sent %d points", n);
+    for (auto &l : g_sent) CHECK(l.line.find("null") == std::string::npos, "a frame carries null: %s", l.line.c_str());
+    auto *done = findType(msgs, "eis_done");
+    CHECK(done != nullptr);
+    if (done) {
+      CHECK(done->doc["points"].as<int>() == 9);
+      CHECK(done->doc["requested"].as<int>() == 10);
+      CHECK(done->doc["skipped"].as<int>() == 1);
+    }
+  }
+
+  std::printf("T15 EIS: an amplitude above 40 mV is clamped and reported\n");
+  reset();
+  g_eis_points = 3;
+  run("{\"command\":\"start_eis\",\"freqMin\":1,\"freqMax\":100000,\"points\":3,\"amplitude\":50,\"dcBias\":0}");
+  {
+    auto msgs = parse();
+    auto *running = findType(msgs, "eis_status");
+    CHECK(running != nullptr);
+    if (running) {
+      CHECK(std::fabs(running->doc["amplitude"].as<double>() - 40.0) < 1e-3, "applied %.3f mV", running->doc["amplitude"].as<double>());
+      CHECK(running->doc["amplitudeClamped"].as<bool>() == true);
+    }
+    bool warned = false;
+    for (auto &l : g_logs) if (l.find("clamped to") != std::string::npos) warned = true;
+    CHECK(warned);
+  }
+  std::printf("    ...and an amplitude of zero is refused\n");
+  reset();
+  run("{\"command\":\"start_eis\",\"freqMin\":1,\"freqMax\":100000,\"points\":3,\"amplitude\":0,\"dcBias\":0}");
+  {
+    auto msgs = parse();
+    CHECK(findType(msgs, "eis") == nullptr);
+    CHECK(lastStatus(msgs, "eis_status") == "error");
+    CHECK(!eisSweepInProgress);
   }
 
   std::printf("\n%d checks, %d failed\n", checks, failures);

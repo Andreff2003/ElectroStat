@@ -11,4 +11,7 @@ that needs the board (see "First bring-up with the board" in `../README.md`).
 - `sim/` compiles the real `ElectroStat_Firmware.ino` against stand-ins for the
   Arduino API and the AD5941 driver that only cost virtual time, and runs CV, SWV
   and BioFET sweeps, a stop, a refused scan rate, the rollover of `micros()` and an
-  overloaded link. `sh sim/run_sim.sh` (needs `sim/ArduinoJson.h`, see the script).
+  overloaded link. For EIS it checks the firmware around the library: a stop between
+  points (and a new sweep right after it), an ignored command, a point that comes back
+  as NaN, and the amplitude clamp. The EIS loop in the stand-in follows the contract of
+  `HELPStat::runSweep()` but is not the real code, which needs the AD5941. `sh sim/run_sim.sh` (needs `sim/ArduinoJson.h`, see the script).

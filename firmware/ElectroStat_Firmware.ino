@@ -70,8 +70,14 @@
       rate or frequency does not fit the board's read time. Each *_done
       message carries lateCount, maxLagUs and the achieved scan rate or
       frequency. See "Real-time sweeps" below and ElectroStat_Timing.h.
-    - "stop" interrupts CV, BioFET and SWV between points. It cannot
-      interrupt EIS, which runs inside the HELPStat library.
+    - "stop" interrupts CV, BioFET and SWV between points. It also stops
+      EIS, but only at the end of the frequency point in progress (the
+      HELPStat library checks once per point), so the latency can be
+      several seconds at low frequency. A stopped EIS sweep reports
+      eis_status "stopped" and then "idle", never eis_done.
+    - EIS points with no usable value (inf or NaN, from a DFT of 0
+      counts) are not sent. eis_done carries "points" (delivered),
+      "requested" and "skipped".
     - microSD backup: NEW. Every point sent over WiFi during a run is
       also appended to a per-run .jsonl file under /backup on the SD
       card (see the "microSD backup" comment above sendLine()), so a
@@ -253,7 +259,8 @@ void sendJson(JsonDocument &doc) {
 //     before it (sendCostUs is the slowest recent send, with slow decay). The
 //     queue is drained when the sweep ends.
 //  3. Every wait also listens for "stop", so a sweep can be interrupted. EIS
-//     runs inside the HELPStat library and still cannot.
+//     runs inside the HELPStat library and is stopped between points through
+//     eisAbortCheck(), so it ends at the end of the current frequency point.
 // The sweep reports its own timing (lateCount, maxLagUs, achieved scan rate or
 // frequency) in the *_done message, so a scan that could not keep its schedule
 // is visible instead of silently slow. UNTESTED against real hardware: only
@@ -436,7 +443,30 @@ static void finishStopped(const char *label) {
 // every single measured point, in real time during the sweep (see the
 // ElectroStat addition in HELPStat.cpp). Must match the field names
 // bridge.py's forward_esp32_message() reads for msg_type == "eis". ──
+static uint32_t eisPointsSent = 0;     // valid points delivered in the current sweep
+static uint32_t eisPointsSkipped = 0;  // points with no usable value (inf or NaN)
+
+// Called by HELPStat::runSweep() after every point and at the start of every
+// cycle: reads one waiting line and reports whether a "stop" has arrived. The
+// sweep then ends after the point in progress (latency up to one point, which
+// is several seconds at low frequency).
+static bool eisAbortCheck() {
+  pollForStop();
+  return abortRequested;
+}
+
 void onEisPoint(const impStruct &point) {
+  // A point whose DFT came back as 0 (no current, e.g. a lost contact) is inf
+  // or NaN. JSON would carry it as null and the bridge would drop it, so it is
+  // not sent, and it is counted so that eis_done reports what was delivered.
+  if (!isfinite(point.real) || !isfinite(point.imag) || !isfinite(point.magnitude) ||
+      !isfinite(point.phaseDeg) || !isfinite(point.freq)) {
+    eisPointsSkipped++;
+    Serial.printf("[EIS] WARNING: no usable value at %.3f Hz (DFT gave 0 counts, "
+                  "check the cell connection) — point skipped\n", point.freq);
+    return;
+  }
+  eisPointsSent++;
   JsonDocument doc;
   doc["type"] = "eis";
   doc["zReal"] = point.real;
@@ -533,13 +563,44 @@ void handleStartEis(JsonDocument &cmd) {
     estat::kEisExtGainSel, estat::kEisDacGainSel,
     amp.generatorMv
   );
-  helpstat.runSweep(); // blocking; streams points via onEisPoint() as it runs
+  eisPointsSent = 0;
+  eisPointsSkipped = 0;
+  abortRequested = false;
+  helpstat.runSweep(); // blocking; streams points via onEisPoint() and checks eisAbortCheck() between points
 
   eisSweepInProgress = false;
+  if (helpstat.eisSweepAborted() || abortRequested) {
+    // Stopped on request: what was measured has already been streamed. Report
+    // "stopped" and then idle (never done), and clear the flags so that a new
+    // sweep can start right away.
+    abortRequested = false;
+    Serial.printf("[EIS] sweep stopped on request after %u point(s)\n", (unsigned)eisPointsSent);
+    {
+      JsonDocument status;
+      status["type"] = "eis_status";
+      status["status"] = "stopped";
+      status["points"] = eisPointsSent;
+      sendJson(status);
+    }
+    {
+      JsonDocument status;
+      status["type"] = "eis_status";
+      status["status"] = "idle";
+      sendJson(status);
+    }
+    stopBackup();
+    return;
+  }
+  if (eisPointsSkipped > 0) {
+    Serial.printf("[EIS] WARNING: %u point(s) skipped, %u delivered\n",
+                  (unsigned)eisPointsSkipped, (unsigned)eisPointsSent);
+  }
   {
     JsonDocument done;
     done["type"] = "eis_done";
-    done["points"] = points;
+    done["points"] = eisPointsSent;       // delivered, not the requested count
+    done["requested"] = points;
+    done["skipped"] = eisPointsSkipped;
     sendJson(done);
   }
   {
@@ -1167,9 +1228,9 @@ void handleStartSwv(JsonDocument &cmd) {
 void handleStop() {
   // Reached from loop(), that is, when no CV, BioFET or SWV sweep is running
   // (a stop during one of those is picked up by waitUntilUs() and ends the
-  // sweep itself). EIS runs inside the HELPStat library and cannot be
-  // interrupted. Otherwise a harmless no-op, matching bridge.py's own "stop"
-  // semantics (broadcasts idle regardless).
+  // sweep itself, and a stop during EIS is picked up by eisAbortCheck()
+  // between points). Otherwise a harmless no-op, matching bridge.py's own
+  // "stop" semantics (broadcasts idle regardless).
   broadcastIdle();
   stopBackup();
 }
@@ -1229,6 +1290,7 @@ void setup() {
 
   Serial.println("ElectroStat firmware starting...");
   helpstat.setEisPointCallback(onEisPoint);
+  helpstat.setEisAbortCheck(eisAbortCheck);
   helpstat.AD5940Start(); // AD5941 SPI/GPIO bring-up (from constants.h pins)
   checkAd5941();
 

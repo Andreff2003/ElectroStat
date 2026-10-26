@@ -37,6 +37,11 @@ upstream, only these additions were made:
   can be streamed out as soon as it's measured, instead of only being
   readable from the library's internal array after the whole sweep
   finishes.
+- `setEisAbortCheck()` / `eisSweepAborted()` — an optional check that
+  both `runSweep()` overloads call at the start of every cycle and after
+  each point. If it returns true the loop ends, the existing
+  `AD5940_ShutDownS()` still runs, and the sweep reports that it was
+  aborted. With no check set (the original behavior) nothing changes.
 - `AD5940_AmperometrySetup()` / `AD5940_AmperometryStep()` — a "apply a
   DC bias, read the resulting current" primitive used by both CV and
   BioFET. This is **new** code, not a reuse of an existing proven HELPStat
@@ -148,9 +153,18 @@ our discussion — Overlay is how you'd compare them either way.
   (`firmware/test`), which does not replace measuring on the board.
 - **`stop` interrupts CV, BioFET and SWV between points** (it is
   checked every 2 ms while waiting) and the sweep reports idle after
-  delivering the points already measured. It still cannot interrupt EIS,
-  which runs inside the HELPStat library; an EIS sweep finishes on its
-  own.
+  delivering the points already measured. **It also stops EIS, but only
+  at the end of the frequency point in progress**: the HELPStat library
+  checks once per point (`setEisAbortCheck`, an ElectroStat addition), so
+  the latency is up to one point, which at low frequency can be several
+  seconds (not measured yet). The AFE is shut down as at the end of a
+  normal sweep, the points already measured have been streamed, and the
+  firmware sends `eis_status` "stopped" and then "idle" instead of
+  `eis_done`, so a new sweep can start right away.
+- **EIS points with no usable value are not sent.** A DFT of 0 counts
+  (typically a lost contact) gives inf or NaN, which JSON would carry as
+  null. The point is skipped with a warning on Serial, and `eis_done`
+  reports `points` (delivered), `requested` and `skipped`.
 - **The quiet time is held at the start potential and is no longer
   capped at 2 s** (the app accepts 0 to 60 s).
 - **Bluetooth Low Energy and the microSD card interface are present on

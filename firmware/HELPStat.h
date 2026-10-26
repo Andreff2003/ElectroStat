@@ -245,9 +245,17 @@ typedef struct _adcStruct {
    ================================================================ */
 typedef void (*EisPointCallback)(const impStruct &point);
 
+/* ElectroStat addition: an optional check that runSweep() calls once per
+   point (and at the start of every cycle). If it returns true the sweep ends
+   after the point in progress, the AFE is shut down as usual, and
+   eisSweepAborted() reports it. With no check set, nothing changes. */
+typedef bool (*EisAbortCheck)(void);
+
 class HELPStat {
     private:
         EisPointCallback _onEisPoint = nullptr;
+        EisAbortCheck _abortCheck = nullptr;
+        bool _aborted = false;
 
         class MyServerCallbacks: public BLEServerCallbacks { // BLE Callback (just says "Device Connected" or "Device Disconnected")
             void onConnect(BLEServer* pServer) {
@@ -415,6 +423,10 @@ class HELPStat {
 
         /* ElectroStat addition — see comment above the class. */
         void setEisPointCallback(EisPointCallback cb);
+
+        /* ElectroStat addition — see EisAbortCheck above. */
+        void setEisAbortCheck(EisAbortCheck cb);
+        bool eisSweepAborted(void) const;
 
         /* ================================================================
            ElectroStat addition — DC "amperometric" step primitive, used by
