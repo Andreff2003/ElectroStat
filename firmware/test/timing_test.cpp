@@ -88,6 +88,21 @@ int main() {
     CHECK(off >= 5000u);                                    // leaves the settling time
   }
 
+  // -- potential convention: E(WE vs RE) in, LPDAC bias out (the hardware gives
+  //    E = Vzero - Vbias, so the bias is minus E), clamped to +-1100 mV --
+  {
+    CHECK(lpdacBiasMvFromE(0.0f) == 0.0f);
+    CHECK(!std::signbit(lpdacBiasMvFromE(0.0f)));              // no negative zero
+    CHECK(lpdacBiasMvFromE(100.0f) == -100.0f);                // a positive potential is a negative bias
+    CHECK(lpdacBiasMvFromE(-500.0f) == 500.0f);
+    CHECK(lpdacBiasMvFromE(1100.0f) == -1100.0f);              // the clamp is symmetric
+    CHECK(lpdacBiasMvFromE(-1100.0f) == 1100.0f);
+    CHECK(lpdacBiasMvFromE(1500.0f) == -1100.0f);              // beyond the range it clips, not wraps
+    CHECK(lpdacBiasMvFromE(-2000.0f) == 1100.0f);
+    // converting twice returns the potential (it is its own inverse inside the range)
+    for (float e = -1100.0f; e <= 1100.0f; e += 37.0f) CHECK(lpdacBiasMvFromE(lpdacBiasMvFromE(e)) == e);
+  }
+
   // -- statistics --
   {
     SweepStats st;

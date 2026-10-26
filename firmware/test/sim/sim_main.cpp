@@ -398,6 +398,67 @@ int main() {
     CHECK(!eisSweepInProgress);
   }
 
+  std::printf("T16 CV potential: the LPDAC gets minus E, and the JSON reports E\n");
+  reset();
+  run(CV_DEFAULT);
+  {
+    auto data = parse("cv_data");
+    CHECK(data.size() == 801);
+    // 3 read-time checks come first, then one read per point
+    bool signOk = g_reads.size() >= 3 + data.size();
+    for (size_t i = 0; signOk && i < data.size(); i++) {
+      double e = data[i].doc["E"].as<double>() * 1000.0;
+      signOk = std::fabs(g_reads[3 + i].biasMv - (e == 0.0 ? 0.0 : -e)) < 1e-3;
+    }
+    CHECK(signOk, "the LPDAC bias is not minus E at every point");
+    CHECK(std::fabs(data.front().doc["E"].as<double>() - 0.6) < 1e-6);
+  }
+
+  std::printf("T17 CV 0 -> -0.5 -> +0.5 V at 2 mV, one cycle, returns to the start: 1001 points\n");
+  reset();
+  run("{\"command\":\"start_cv\",\"eStart\":0,\"eVertex1\":-0.5,\"eVertex2\":0.5,\"nCycles\":1,\"stepMv\":2,\"scanRate\":100,\"quietTime\":0,\"rtiaOhms\":10000}");
+  {
+    auto data = parse("cv_data");
+    CHECK(data.size() == 1001, "got %d points", (int)data.size());
+    int fwd = 0, rev = 0, ret = 0;
+    for (auto &m : data) {
+      std::string b = m.doc["branch"].as<const char *>();
+      if (b == "forward") fwd++; else if (b == "reverse") rev++; else if (b == "return") ret++;
+    }
+    CHECK(fwd == 251 && rev == 500 && ret == 250, "forward %d, reverse %d, return %d", fwd, rev, ret);
+    CHECK(std::fabs(data.back().doc["E"].as<double>()) < 1e-6, "last E %.4f", data.back().doc["E"].as<double>());
+    CHECK(std::string(data.back().doc["branch"].as<const char *>()) == "return");
+    // the highest potential reached is the second vertex
+    double emax = -9, emin = 9;
+    for (auto &m : data) { double e = m.doc["E"].as<double>(); emax = (std::max)(emax, e); emin = (std::min)(emin, e); }
+    CHECK(std::fabs(emax - 0.5) < 1e-6 && std::fabs(emin + 0.5) < 1e-6);
+  }
+  std::printf("    ...two cycles: the first returns to the start too, 2001 points\n");
+  reset();
+  run("{\"command\":\"start_cv\",\"eStart\":0,\"eVertex1\":-0.5,\"eVertex2\":0.5,\"nCycles\":2,\"stepMv\":2,\"scanRate\":100,\"quietTime\":0,\"rtiaOhms\":10000}");
+  CHECK(parse("cv_data").size() == 2001, "got %d points", (int)parse("cv_data").size());
+
+  std::printf("T18 SWV pulses refer to E(WE): forward = step + pulse in the scan direction\n");
+  reset();
+  run("{\"command\":\"start_swv\",\"startE\":-0.2,\"endE\":0.6,\"step_mV\":2,\"amplitude_mV\":25,\"frequency_Hz\":25,\"quietTime_s\":0,\"direction\":\"anodic\",\"rtiaOhms\":10000}");
+  {
+    auto data = parse("swv_data");
+    CHECK(data.size() == 401);
+    // read 3 + 2i is the forward pulse of step i, 3 + 2i + 1 the reverse
+    bool ok = g_reads.size() >= 3 + 2 * data.size();
+    for (size_t i = 0; ok && i < data.size(); i++) {
+      double e = data[i].doc["E"].as<double>() * 1000.0;
+      ok = std::fabs(g_reads[3 + 2 * i].biasMv - (-(e + 25.0))) < 1e-2
+        && std::fabs(g_reads[3 + 2 * i + 1].biasMv - (-(e - 25.0))) < 1e-2;
+    }
+    CHECK(ok, "forward and reverse pulses are not E+25 and E-25 (as minus the LPDAC bias)");
+  }
+
+  std::printf("T19 BioFET gate voltage is NOT converted (it is not an electrode potential)\n");
+  reset();
+  run(FET_DEFAULT);
+  CHECK(g_reads.size() > 3 && std::fabs(g_reads[3].biasMv - (-500.0)) < 1e-3, "first gate read at %.1f mV", g_reads.size() > 3 ? g_reads[3].biasMv : 0.0);
+
   std::printf("\n%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -114,6 +114,26 @@ struct SweepStats {
   }
 };
 
+// ── Potential convention ─────────────────────────────────────────
+// Everywhere in this firmware, and in the JSON it sends, E is the potential of
+// the working electrode (SE0) versus the reference electrode (RE0), and a
+// positive current is anodic (it leaves WE), as in IUPAC.
+//
+// The hardware does not apply it that way round. The LPDAC drives RE0 to Vbias
+// while the HSTIA holds SE0 at Vzero, so E(WE) - E(RE) = Vzero - Vbias, which is
+// minus the "bias" that AD5940_AmperometrySetBias() and AD5940_TDD() take (the
+// AD5940 convention is SensorBias = VRE0 - VSE0). lpdacBiasMvFromE() is the one
+// place that converts, and it keeps the +-1100 mV range of the 12-bit code
+// around Vzero.
+constexpr float kLpdacBiasLimitMv = 1100.0f;
+
+inline float lpdacBiasMvFromE(float eMv) {
+  float c = eMv;
+  if (c < -kLpdacBiasLimitMv) c = -kLpdacBiasLimitMv;
+  if (c >  kLpdacBiasLimitMv) c =  kLpdacBiasLimitMv;
+  return c == 0.0f ? 0.0f : -c;   // no negative zero
+}
+
 // ── EIS excitation amplitude ─────────────────────────────────────
 // The sine that AD5940_TDD is told to generate is attenuated twice before it
 // reaches the cell: by the excitation buffer and by the HS DAC. AD5940_TDD takes

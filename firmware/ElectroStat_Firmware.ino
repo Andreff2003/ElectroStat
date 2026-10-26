@@ -16,6 +16,12 @@
   already expect (see bridge.py's own header comment for the full
   contract).
 
+  CONVENTION: E is the potential of the working electrode (SE0) versus the
+  reference electrode (RE0), and a positive current is anodic (it leaves WE).
+  The AD5941 applies its bias the other way round (SensorBias = VRE0 - VSE0),
+  so CV, SWV and the EIS dcBias go through estat::lpdacBiasMvFromE() in
+  ElectroStat_Timing.h. The BioFET gate voltage does not (see handleStartFet).
+
   STATUS AS OF THIS FILE (read before wiring up real hardware):
     - EIS: implemented, reusing the AD5941 driver from the LinnesLab
       HELPStat library (HELPStat.cpp/.h, ad5940.c/.h, vendored
@@ -163,10 +169,12 @@ uint32_t rtiaOhmsToSel(float ohms) {
   return best;
 }
 
-// Calibration resistor value in ohms. The board now uses a 10 kOhm RCAL, as
-// in the original HELPStat; 9980 ohm is the value measured with a DMM, which
-// is what must be used here, not the nominal 10000.
-static const float RCAL_OHMS = 9980.0f;
+// Calibration resistor value in ohms. This is the NOMINAL value of the 10 kOhm
+// RCAL that the board uses, as in the original HELPStat. It has not been
+// measured with a multimeter yet. Replace it with the measured value, because
+// every EIS impedance (Z = DFT Cal / DFT Mag * RCAL) scales with it, and with
+// it every current that is calibrated against RCAL.
+static const float RCAL_OHMS = 10000.0f;
 
 static bool eisSweepInProgress = false;
 
@@ -497,7 +505,12 @@ void handleStartEis(JsonDocument &cmd) {
   // HELPStat::AD5940_TDD, sized for a +-1.1 V range around the 1.1 V
   // Vzero reference) — convert here, once, so nobody has to remember it.
   float dcBiasVolts = cmd["dcBias"] | 0.0f;
-  float biasMillivolts = dcBiasVolts * 1000.0f;
+  // dcBias is E(WE) versus RE. AD5940_TDD programs the same LPDAC bias path as
+  // the CV code, where E(WE) - E(RE) = Vzero - Vbias, so it gets the converted
+  // value (see estat::lpdacBiasMvFromE). An EIS dummy cell is linear, so the
+  // sign cannot be checked on one: it is the same code path and the same
+  // electrical reasoning as CV, and has not been verified on a nonlinear cell.
+  float biasMillivolts = estat::lpdacBiasMvFromE(dcBiasVolts * 1000.0f);
   // The app's amplitude is the excitation AT THE CELL. AD5940_TDD takes the
   // amplitude of the waveform generator, which the excitation buffer and the
   // HS DAC attenuate (x0.25 and x0.2 with the gains below, so 20x in total):
@@ -539,8 +552,8 @@ void handleStartEis(JsonDocument &cmd) {
   float decades = fabs(log10(freqMax) - log10(freqMin));
   int pointsPerDecade = max(1, (int)round(points / max(decades, 0.01f)));
 
-  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) bias=%.1fmV\n",
-                freqMin, freqMax, points, pointsPerDecade, biasMillivolts);
+  Serial.printf("[EIS] freqMin=%.3f freqMax=%.3f points=%d (~%d/decade) dcBias E(WE)=%.1fmV\n",
+                freqMin, freqMax, points, pointsPerDecade, dcBiasVolts * 1000.0f);
   Serial.printf("[EIS] requested %.1f mV at the cell -> generator %.1f mV (gains x%g, x%g)\n",
                 requestedMv, amp.generatorMv, amp.dacGain, amp.extGain);
 
@@ -644,7 +657,7 @@ static bool cvStep(estat::StepClock &clk, uint32_t &k, uint32_t convUs, estat::S
   float current_uA = 0.0f;
   bool outOfRange = false;
   uint32_t readEnd = 0;
-  if (!rtSlot(clk, k, E * 1000.0f, cvRtiaOhms, convUs, st, &current_uA, &outOfRange, &readEnd)) return false;
+  if (!rtSlot(clk, k, estat::lpdacBiasMvFromE(E * 1000.0f), cvRtiaOhms, convUs, st, &current_uA, &outOfRange, &readEnd)) return false;
   k++;
   if (outOfRange) cvOutOfRangeCount++;
   PendingPoint p = {};
@@ -715,7 +728,7 @@ void handleStartCv(JsonDocument &cmd) {
   // Plan the schedule before announcing "running": measure how long one read
   // takes on this board and check that a step's slot can hold it.
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(cvRtiaOhms));
-  uint32_t readUs = calibrateReadUs(eStart * 1000.0f, cvRtiaOhms);
+  uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(eStart * 1000.0f), cvRtiaOhms);
   if (readUs == 0) {
     sendSweepError("cv_error", "the ADC did not answer during the read-time check");
     return;
@@ -745,7 +758,7 @@ void handleStartCv(JsonDocument &cmd) {
   }
 
   // Hold the start potential for the quiet time, so the solution settles at it.
-  helpstat.AD5940_AmperometrySetBias(eStart * 1000.0f);
+  helpstat.AD5940_AmperometrySetBias(estat::lpdacBiasMvFromE(eStart * 1000.0f));
   if (quietTime > 0) {
     waitUntilUs(micros() + (uint32_t)(min(quietTime, 60.0f) * 1.0e6f));
   }
@@ -762,7 +775,10 @@ void handleStartCv(JsonDocument &cmd) {
     if (abortRequested) break;
     cur = cvRampTo(cur, eV2, "reverse", c, stepV, clk, k, convUs, st);
     if (abortRequested) break;
-    if (c < nCycles && fabs(cur - eStart) > 1e-6f) {
+    // Every cycle ends back at the start potential, the last one included, as
+    // commercial potentiostats do: start -> vertex 1 -> vertex 2 -> start. The
+    // app counts its expected points that way too.
+    if (fabs(cur - eStart) > 1e-6f) {
       cur = cvRampTo(cur, eStart, "return", c, stepV, clk, k, convUs, st);
       if (abortRequested) break;
     }
@@ -898,6 +914,16 @@ void handleStartFet(JsonDocument &cmd) {
                 curve, vgMin, vgMax, vgStep, concentration);
 
   // Plan the schedule before announcing "running" (see handleStartCv).
+  // BioFET potential convention (deliberately NOT converted with
+  // estat::lpdacBiasMvFromE, unlike CV and SWV): vg and the read-out bias are
+  // the voltage the LPDAC applies, positive meaning a higher Vbias. That is not
+  // an electrode potential of WE versus RE. It is the gate voltage of a
+  // transistor, and what a positive value means for a real device depends on
+  // how its gate, drain and source are wired to CE0/RE0/SE0, which is still
+  // undefined (no transistor has been connected). With the gate on the driven
+  // electrode and the channel on SE0, the native sign is Vgs, so it is kept.
+  // Decide this again, and add the conversion here if needed, when a device
+  // is wired.
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(fetRtiaOhms));
   uint32_t readUs = calibrateReadUs(vgMin * 1000.0f, fetRtiaOhms);
   if (readUs == 0) {
@@ -1112,7 +1138,7 @@ void handleStartSwv(JsonDocument &cmd) {
 
   // Plan the schedule before announcing "running" (see handleStartCv).
   helpstat.AD5940_AmperometrySetup(rtiaOhmsToSel(swvRtiaOhms));
-  uint32_t readUs = calibrateReadUs(startE * 1000.0f, swvRtiaOhms);
+  uint32_t readUs = calibrateReadUs(estat::lpdacBiasMvFromE(startE * 1000.0f), swvRtiaOhms);
   if (readUs == 0) {
     sendSweepError("swv_error", "the ADC did not answer during the read-time check");
     return;
@@ -1142,7 +1168,7 @@ void handleStartSwv(JsonDocument &cmd) {
   }
 
   // Hold the start potential for the quiet time, so the solution settles at it.
-  helpstat.AD5940_AmperometrySetBias(startE * 1000.0f);
+  helpstat.AD5940_AmperometrySetBias(estat::lpdacBiasMvFromE(startE * 1000.0f));
   if (quietTimeS > 0) {
     waitUntilUs(micros() + (uint32_t)(min(quietTimeS, 60.0f) * 1.0e6f));
   }
@@ -1165,8 +1191,11 @@ void handleStartSwv(JsonDocument &cmd) {
     float iForward = 0.0f, iReverse = 0.0f;
     bool fwdOutOfRange = false, revOutOfRange = false;
     uint32_t readEndF = 0, readEndR = 0;
-    ok = rtSlot(clk, (uint32_t)(2 * i), eForward * 1000.0f, swvRtiaOhms, convUs, st, &iForward, &fwdOutOfRange, &readEndF)
-      && rtSlot(clk, (uint32_t)(2 * i + 1), eReverse * 1000.0f, swvRtiaOhms, convUs, st, &iReverse, &revOutOfRange, &readEndR);
+    // eForward and eReverse are potentials of WE versus RE, like eStep, and
+    // reach the LPDAC through lpdacBiasMvFromE(), so "forward" is the pulse in
+    // the direction of the scan whichever way the hardware applies its bias.
+    ok = rtSlot(clk, (uint32_t)(2 * i), estat::lpdacBiasMvFromE(eForward * 1000.0f), swvRtiaOhms, convUs, st, &iForward, &fwdOutOfRange, &readEndF)
+      && rtSlot(clk, (uint32_t)(2 * i + 1), estat::lpdacBiasMvFromE(eReverse * 1000.0f), swvRtiaOhms, convUs, st, &iReverse, &revOutOfRange, &readEndR);
     if (!ok) break;
     bool outOfRange = fwdOutOfRange || revOutOfRange;
     if (outOfRange) swvOutOfRangeCount++;

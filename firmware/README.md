@@ -108,6 +108,30 @@ our discussion — Overlay is how you'd compare them either way.
 
 ## Known gaps / next steps
 
+- **Potential convention: E is the potential of WE (SE0) versus RE
+  (RE0), and a positive current is anodic.** The AD5941 applies its bias
+  the other way round: the LPDAC drives RE0 to Vbias while SE0 is held at
+  Vzero, so E(WE) - E(RE) = Vzero - Vbias (the AD5940 convention is
+  `SensorBias = VRE0 - VSE0`). A CV on a resistor showed it: the slope
+  was negative, and on a capacitor the positive-going scan gave the more
+  negative current plateau. CV, SWV and the EIS `dcBias` now go through
+  `estat::lpdacBiasMvFromE()` (`ElectroStat_Timing.h`), the one place that
+  flips the sign and keeps the +-1100 mV clamp. The JSON still reports the
+  requested E. In SWV, the forward and reverse pulses are potentials of
+  WE too. **The BioFET gate voltage is not converted**: it is a gate
+  voltage, not an electrode potential, and what its sign means for a real
+  transistor depends on a wiring that is not defined yet (see the comment
+  in `handleStartFet`). The EIS `dcBias` follows the same path and the same
+  reasoning as CV, but an EIS dummy cell is linear, so it has not been
+  checked on a nonlinear cell.
+- **CV: every cycle ends at the start potential, the last one too**
+  (start -> vertex 1 -> vertex 2 -> start, the last segment labeled
+  "return"), so for 0 -> -0.5 -> +0.5 V at 2 mV one cycle is 1001 points.
+  Before, the last cycle stopped at vertex 2 (751 points) and the app,
+  which counts the return, expected about 1000.
+- **`RCAL_OHMS` is the nominal 10 kOhm and has not been measured.**
+  Every EIS impedance scales with it (`Z = DFT Cal / DFT Mag * RCAL`), so
+  replace it with the value measured with a multimeter.
 - **EIS amplitude: the app's value is the excitation at the cell.** The
   waveform generator that `AD5940_TDD` programs is attenuated by the
   excitation buffer (x0.25) and the HS DAC (x0.2) before the cell, 20x in
