@@ -29,6 +29,9 @@ export type BaselineResolvedMethod =
 type BranchBaselineMethod = "linear-first-15" | "linear-edges" | "linear-anchors" | "none";
 export type DStatus = "valid" | "apparent" | "invalid";
 
+/** The peak, or a point this close to it, was flagged as outside the ADC window: the current may be clipped. */
+export const OUT_OF_RANGE_PEAK_WINDOW_MV = 20;
+
 export interface CVMetrics {
   // Raw (uncorrected) peak currents in µA
   IpaRaw: number;
@@ -55,6 +58,13 @@ export interface CVMetrics {
   // Spread
   deltaEp: number;          // mV
   IpaIpcRatio: number;      // |Ipa/Ipc|
+  /**
+   * False when the peak point, or a point within OUT_OF_RANGE_PEAK_WINDOW_MV of it, was outside the ADC window of
+   * the device (the current is clipped): the peak current cannot be trusted, and the number is kept only for
+   * reference. Absent or true otherwise.
+   */
+  IpaValid?: boolean;
+  IpcValid?: boolean;
   // Derived parameters — NaN when not physically valid
   n_electrons: number;      // from CV_DELTA_EP_REVERSIBLE_MV (≈57 mV) / ΔEp, only valid for reversible @25°C
   n_est_valid: boolean;
@@ -738,6 +748,16 @@ export function computeCVMetrics(
   const IpaIpcRatio =
     hasAnodic && hasCathodic ? Math.abs(IpaCorrected / IpcCorrected) : NaN;
 
+  // A peak at or next to points outside the ADC window is clipped: its current is not the current of the cell.
+  const nearOutOfRange = (branch: CVDataPoint[], E: number) =>
+    branch.some((p) => p.outOfRange === true && Math.abs(p.E - E) * 1000 <= OUT_OF_RANGE_PEAK_WINDOW_MV);
+  const IpaValid = !(hasAnodic && anodic && nearOutOfRange(anodicBranch, anodic.E));
+  const IpcValid = !(hasCathodic && cathodic && nearOutOfRange(cathodicBranch, cathodic.E));
+  if (!IpaValid || !IpcValid) {
+    const which = !IpaValid && !IpcValid ? "Ipa/Ipc" : !IpaValid ? "Ipa" : "Ipc";
+    warnings.push(`peak current outside the ADC window: ${which} not reliable, use a lower RTIA`);
+  }
+
   // Randles-Ševčík — only when current/area/conc/scan are physical and the
   // system is at least quasi-reversible.
   const cBulk = input.cMM * 1e-6;
@@ -941,6 +961,8 @@ export function computeCVMetrics(
     Ipa: IpaCorrected,
     Ipc: IpcCorrected,
     IpaExcursion,
+    IpaValid,
+    IpcValid,
     IpcExcursion,
     Epa,
     Epc,

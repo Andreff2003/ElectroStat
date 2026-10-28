@@ -397,7 +397,8 @@ describe("buildCVExportText — headers, baseline columns and processed metrics"
     expect(rawIdx).toBeGreaterThan(0);
     const sampleRow = lines[rawIdx + 5] ?? "";
     const cols = sampleRow.split(";");
-    expect(cols.length).toBe(10);
+    expect(cols.length).toBe(11);   // ... and out_of_range as the last column
+    expect(cols[10]).toBe("No");
     expect(cols[1]).toBe("—"); // channel (single-device session)
     expect(cols[8]).not.toBe("N/A"); // baseline_uA
     expect(cols[9]).not.toBe("N/A"); // I_corrected_uA

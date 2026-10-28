@@ -561,6 +561,15 @@ export function analyzeSWV(
     baseline.intercept_uA,
     baseline.warnings,
   );
+  // A peak at or next to points outside the ADC window is clipped: its current is not the current of the cell.
+  if (metrics.peakDetected && metrics.peakPotential_V != null) {
+    const peakE = metrics.peakPotential_V;
+    const clipped = data.some((d) => d.outOfRange === true && Math.abs(d.E - peakE) * 1000 <= 20);
+    if (clipped) {
+      metrics.peakCurrentValid = false;
+      metrics.warnings.push("peak current outside the ADC window: the peak current is not reliable, use a lower RTIA");
+    }
+  }
   const corrected: SWVDataPoint[] = data.map((d, i) => ({
     ...d,
     baseline: Number.isFinite(baseline.baseline[i]) && Number.isFinite(d.INet)

@@ -135,6 +135,11 @@ export interface SWVMetrics {
   lodEstimate_nM?: number | null;
   peakDetected: boolean;
   peakPolarity: "anodic" | "cathodic" | "unknown";
+  /**
+   * False when the peak point, or a point within 20 mV of it, was outside the ADC window of the device (the
+   * current is clipped): the peak current cannot be trusted. Absent or true otherwise.
+   */
+  peakCurrentValid?: boolean;
   warnings: string[];
 }
 

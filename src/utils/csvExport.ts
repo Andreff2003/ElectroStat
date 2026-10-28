@@ -121,6 +121,16 @@ function metaRow(measurementsCount: number, source: ExportSource | string): stri
 
 const BLANK = "\n\n";
 
+/**
+ * The "out of range" cell of a raw row: the AD5941 flagged the point as outside its usable ADC window, so its
+ * current may be clipped. Only a flagged point is Yes (the device sends the flag for those only), a marker row is N/A.
+ */
+const oor = (p: { outOfRange?: boolean }): string => (p.outOfRange === true ? "Yes" : "No");
+
+/** The validity cell of a peak current in the processed results: N/A when there is no peak. */
+const validCell = (valid: boolean | undefined, found: boolean): string =>
+  !found ? "N/A" : valid === false ? "No (outside the ADC window)" : "Yes";
+
 export type ExportSource = "simulated" | "live" | "imported" | "unknown";
 
 export interface CalibrationExportPoint {
@@ -187,6 +197,7 @@ const RAW_FET_TRANSFER_HEADERS = [
   "Curve",
   "Vg (V)",
   "Id (µA)",
+  "Out of range",
 ];
 
 const RAW_FET_TIME_HEADERS = [
@@ -197,6 +208,7 @@ const RAW_FET_TIME_HEADERS = [
   "Time (s)",
   "Id (µA)",
   "Marker",
+  "Out of range",
 ];
 
 
@@ -333,10 +345,10 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
       const ts = fmtTs(m.timestamp);
       const conc = fmtNum(m.concentration);
       for (const p of m.baseline) {
-        lines.push(toRow([m.id, channelCell(m), ts, conc, "baseline", fmtNum(p.vg), fmtNum(p.id)]));
+        lines.push(toRow([m.id, channelCell(m), ts, conc, "baseline", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
       }
       for (const p of m.analyte) {
-        lines.push(toRow([m.id, channelCell(m), ts, conc, "analyte", fmtNum(p.vg), fmtNum(p.id)]));
+        lines.push(toRow([m.id, channelCell(m), ts, conc, "analyte", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
       }
     }
 
@@ -347,10 +359,10 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
       const ts = fmtTs(m.timestamp);
       const conc = fmtNum(m.concentration);
       for (const p of m.timeData) {
-        lines.push(toRow([m.id, channelCell(m), ts, conc, fmtNum(p.time), fmtNum(p.id), "N/A"]));
+        lines.push(toRow([m.id, channelCell(m), ts, conc, fmtNum(p.time), fmtNum(p.id), "N/A", oor(p)]));
       }
       for (const mk of m.markers) {
-        lines.push(toRow([m.id, channelCell(m), ts, conc, fmtNum(mk.time), "N/A", fmtStr(mk.label)]));
+        lines.push(toRow([m.id, channelCell(m), ts, conc, fmtNum(mk.time), "N/A", fmtStr(mk.label), "N/A"]));
       }
     }
   }
@@ -363,7 +375,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
     lines.push(toRow([
       "measurement_id", "channel", "timestamp", "mode", "concentration_mM",
       "point_index", "time_s", "cycle", "branch",
-      "E_V", "I_raw_uA", "baseline_uA", "I_corrected_uA",
+      "E_V", "I_raw_uA", "baseline_uA", "I_corrected_uA", "out_of_range",
     ]));
     for (const m of cvList) {
       const ts = fmtTs(m.measurementTimestamp ?? m.timestamp);
@@ -380,6 +392,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
           fmtSig(p.E), fmtSig(p.I),
           fmtSig(cp?.baseline ?? p.baseline),
           fmtSig(cp?.Icorr ?? p.Icorr),
+          oor(p),
         ]));
       }
     }
@@ -396,7 +409,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
       "measurement_id", "channel", "timestamp", "mode", "concentration_nM",
       "point_index", "time_s", "E_V",
       "I_forward_uA", "I_reverse_uA", "I_net_raw_uA",
-      "baseline_uA", "I_net_corrected_uA", "direction",
+      "baseline_uA", "I_net_corrected_uA", "direction", "out_of_range",
     ]));
     for (const m of swvList) {
       const ts = fmtTs(m.measurementTimestamp ?? m.timestamp);
@@ -410,7 +423,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
           `${i}`, fmtSig(p.time), fmtSig(p.E),
           fmtSig(p.IForward), fmtSig(p.IReverse), fmtSig(p.INet),
           fmtSig(cp?.baseline ?? null), fmtSig(cp?.ICorrected ?? null),
-          fmtStr(p.direction),
+          fmtStr(p.direction), oor(p),
         ]));
       }
     }
@@ -650,6 +663,7 @@ function buildSessionCVMetaAndMetrics(
     "Epa_V", "Epc_V", "deltaEp_mV", "E0prime_V",
     "Ipa_raw_uA", "Ipc_raw_uA",
     "Ipa_corrected_uA", "Ipc_corrected_uA",
+    "Ipa_valid", "Ipc_valid",
     "abs_Ipa_over_Ipc",
     "noise_uA", "SNR_anodic", "SNR_cathodic",
     "n_est", "n_est_valid",
@@ -671,6 +685,7 @@ function buildSessionCVMetaAndMetrics(
       fmtSig(metrics.Epa), fmtSig(metrics.Epc), fmtSig(metrics.deltaEp), fmtSig(metrics.E0prime),
       fmtSig(metrics.IpaRaw), fmtSig(metrics.IpcRaw),
       fmtSig(metrics.IpaCorrected), fmtSig(metrics.IpcCorrected),
+      validCell(metrics.IpaValid, metrics.hasAnodic), validCell(metrics.IpcValid, metrics.hasCathodic),
       fmtSig(metrics.IpaIpcRatio),
       fmtSig(metrics.noise_uA), fmtSig(metrics.SNR_anodic), fmtSig(metrics.SNR_cathodic),
       fmtSig(metrics.n_electrons), metrics.n_est_valid ? "Yes" : "No",
@@ -975,10 +990,10 @@ export function exportFETTransferData(
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const rawLines = [sectionHeader("RAW FET TRANSFER DATA"), toRow(RAW_FET_TRANSFER_HEADERS)];
   for (const p of baseline) {
-    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", "baseline", fmtNum(p.vg), fmtNum(p.id)]));
+    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", "baseline", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
   }
   for (const p of analyte) {
-    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", "analyte", fmtNum(p.vg), fmtNum(p.id)]));
+    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", "analyte", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
   }
   const out = [
     metaRow(1, source),
@@ -1000,7 +1015,7 @@ export function exportFETTimeData(
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const rawLines = [sectionHeader("RAW FET TIME DATA"), toRow(RAW_FET_TIME_HEADERS)];
   for (const p of data) {
-    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", fmtNum(p.time), fmtNum(p.id), "N/A"]));
+    rawLines.push(toRow([id, NO_CHANNEL, ts, "N/A", fmtNum(p.time), fmtNum(p.id), "N/A", oor(p)]));
   }
   const out = [
     metaRow(1, source),
@@ -1071,18 +1086,18 @@ export function buildFETExportText(args: FETDataExportArgs, now: number = Date.n
     toRow(RAW_FET_TRANSFER_HEADERS),
   ];
   for (const p of args.baseline)
-    rawTransfer.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), "baseline", fmtNum(p.vg), fmtNum(p.id)]));
+    rawTransfer.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), "baseline", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
   for (const p of args.analyte)
-    rawTransfer.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), "analyte", fmtNum(p.vg), fmtNum(p.id)]));
+    rawTransfer.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), "analyte", fmtNum(p.vg), fmtNum(p.id), oor(p)]));
 
   const rawTime = [
     sectionHeader("RAW FET TIME DATA"),
     toRow(RAW_FET_TIME_HEADERS),
   ];
   for (const p of args.timeData)
-    rawTime.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), fmtNum(p.time), fmtNum(p.id), "N/A"]));
+    rawTime.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), fmtNum(p.time), fmtNum(p.id), "N/A", oor(p)]));
   for (const mk of (args.markers ?? []))
-    rawTime.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), fmtNum(mk.time), "N/A", fmtStr(mk.label)]));
+    rawTime.push(toRow([id, NO_CHANNEL, ts, fmtNum(conc), fmtNum(mk.time), "N/A", fmtStr(mk.label), "N/A"]));
 
 
   const m = args.metrics ?? {};
@@ -1244,7 +1259,7 @@ export function exportCalibrationCSV(
 
 const RAW_CV_HEADERS = [
   "measurement_id", "channel", "timestamp", "time_s", "cycle", "branch",
-  "E_V", "I_uA", "baseline_uA", "I_corrected_uA",
+  "E_V", "I_uA", "baseline_uA", "I_corrected_uA", "out_of_range",
 ];
 
 /** Format a number with 6 sig figs, scientific for tiny values. */
@@ -1404,12 +1419,14 @@ export function buildCVExportText(
       fmtSig(p.E), fmtSig(p.I),
       fmtSig(cp?.baseline ?? p.baseline),
       fmtSig(cp?.Icorr ?? p.Icorr),
+      oor(p),
     ]));
   }
   const procHeaders = [
     "measurement_id", "timestamp", "scan_rate_mVs", "cv_model",
     "Ipa_raw_uA", "Ipc_raw_uA",
     "Ipa_corrected_uA", "Ipc_corrected_uA",
+    "Ipa_valid", "Ipc_valid",
     "Epa_V", "Epc_V", "E0prime_V",
     "deltaEp_mV", "abs_Ipa_over_Ipc",
     "n_est", "n_est_valid",
@@ -1425,6 +1442,7 @@ export function buildCVExportText(
       id, ts, fmtSig(cvParams.scanRate), fmtStr(cvParams.cvModel),
       fmtSig(metrics.IpaRaw), fmtSig(metrics.IpcRaw),
       fmtSig(metrics.IpaCorrected), fmtSig(metrics.IpcCorrected),
+      validCell(metrics.IpaValid, metrics.hasAnodic), validCell(metrics.IpcValid, metrics.hasCathodic),
       fmtSig(metrics.Epa), fmtSig(metrics.Epc), fmtSig(metrics.E0prime),
       fmtSig(metrics.deltaEp), fmtSig(metrics.IpaIpcRatio),
       fmtSig(metrics.n_electrons), metrics.n_est_valid ? "Yes" : "No",
@@ -1642,14 +1660,14 @@ export function buildSWVExportText(opts: ExportSWVOptions, now: number = Date.no
   const raw: string[] = [];
   raw.push(sectionHeader("RAW SWV DATA"));
   raw.push(toRow([
-    "index", "channel", "time_s", "E_V", "I_forward_uA", "I_reverse_uA", "I_net_raw_uA", "direction",
+    "index", "channel", "time_s", "E_V", "I_forward_uA", "I_reverse_uA", "I_net_raw_uA", "direction", "out_of_range",
   ]));
   for (let i = 0; i < data.length; i++) {
     const p = data[i];
     raw.push(toRow([
       `${i}`, NO_CHANNEL, fmtSig(p.time), fmtSig(p.E),
       fmtSig(p.IForward), fmtSig(p.IReverse), fmtSig(p.INet),
-      fmtStr(p.direction),
+      fmtStr(p.direction), oor(p),
     ]));
   }
 
@@ -1670,7 +1688,7 @@ export function buildSWVExportText(opts: ExportSWVOptions, now: number = Date.no
   proc.push(sectionHeader("PROCESSED SWV RESULTS"));
   proc.push(toRow([
     "peak_detected", "peak_polarity", "peak_potential_V",
-    "peak_current_raw_uA", "peak_current_corrected_uA",
+    "peak_current_raw_uA", "peak_current_corrected_uA", "peak_current_valid",
     "half_peak_width_mV", "SNR", "noise_rms_uA",
     "baseline_method_used", "baseline_slope_uA_per_V", "baseline_intercept_uA",
     "peak_area_uA_V", "warnings",
@@ -1681,6 +1699,7 @@ export function buildSWVExportText(opts: ExportSWVOptions, now: number = Date.no
     fmtSig(metrics?.peakPotential_V ?? null),
     fmtSig(metrics?.peakCurrentRaw_uA ?? null),
     fmtSig(metrics?.peakCurrentCorrected_uA ?? null),
+    metrics?.peakDetected ? (metrics.peakCurrentValid === false ? "No (outside the ADC window)" : "Yes") : "N/A",
     fmtSig(metrics?.halfPeakWidth_mV ?? null),
     fmtSig(metrics?.snr ?? null),
     fmtSig(metrics?.noiseRms_uA ?? null),

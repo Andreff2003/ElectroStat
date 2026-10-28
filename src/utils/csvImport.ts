@@ -265,6 +265,11 @@ function groupByMeasurement<P>(
   return order.map((id) => map.get(id)!);
 }
 
+/** The "out of range" column, where there is one: only a flagged point is true, as the device sends it. */
+function readOutOfRange(row: string[], i: number): true | undefined {
+  return i >= 0 && (row[i] ?? "").trim().toLowerCase() === "yes" ? true : undefined;
+}
+
 /** Optional "Channel" column (absent in pre-multichannel exports). */
 function readChannel(row: string[], iCh: number): string | undefined {
   if (iCh < 0) return undefined;
@@ -343,6 +348,7 @@ function parseCVSection(section: SectionSlice): ImportedCV {
   const iI = findCol(headers, ["I_uA", "I_raw_uA", "I (µA)"]);
   const iBase = findCol(headers, ["baseline_uA"]);
   const iCorr = findCol(headers, ["I_corrected_uA"]);
+  const iOor = findCol(headers, ["out_of_range", "Out of range"]);
 
   const entries: { id: string; concentration: number | null; channelLabel?: string; point: CVDataPoint }[] = [];
   let skipped = 0;
@@ -367,6 +373,7 @@ function parseCVSection(section: SectionSlice): ImportedCV {
     if (branch) p.branch = branch;
     if (Number.isFinite(baseline)) p.baseline = baseline;
     if (Number.isFinite(Icorr)) p.Icorr = Icorr;
+    if (readOutOfRange(r, iOor)) p.outOfRange = true;
     const concRaw = iConc >= 0 ? parseNum(r[iConc]) : NaN;
     entries.push({
       id: readId(r, iId),
@@ -390,6 +397,7 @@ function parseSWVSection(section: SectionSlice): ImportedSWV {
   const iRev = findCol(headers, ["I_reverse_uA"]);
   const iNet = findCol(headers, ["I_net_raw_uA", "I_net_uA"]);
   const iDir = findCol(headers, ["direction"]);
+  const iOor = findCol(headers, ["out_of_range", "Out of range"]);
 
   const entries: { id: string; concentration: number | null; channelLabel?: string; point: SWVDataPoint }[] = [];
   let skipped = 0;
@@ -423,6 +431,7 @@ function parseSWVSection(section: SectionSlice): ImportedSWV {
         time: Number.isFinite(time) ? time : running,
         index: Number.isFinite(idxRaw) ? idxRaw : running,
         direction,
+        ...(readOutOfRange(r, iOor) ? { outOfRange: true as const } : {}),
       },
     });
     runByGroup.set(id, running + 1);
@@ -438,6 +447,7 @@ function parseFETTransferSection(section: SectionSlice): ImportedFETTransfer {
   const iCurve = findCol(headers, ["Curve", "curve"]);
   const iVg = findCol(headers, ["Vg (V)", "Vg_V", "vg"]);
   const iId2 = findCol(headers, ["Id (µA)", "Id_uA", "id"]);
+  const iOor = findCol(headers, ["Out of range", "out_of_range"]);
 
   interface Group {
     id: string;
@@ -466,6 +476,7 @@ function parseFETTransferSection(section: SectionSlice): ImportedFETTransfer {
     }
     const curve = iCurve >= 0 ? (r[iCurve] ?? "").trim().toLowerCase() : "";
     const point: FETTransferPoint = { vg, id };
+    if (readOutOfRange(r, iOor)) point.outOfRange = true;
     if (curve === "analyte") g.analyte.push(point);
     else g.baseline.push(point);
   }
@@ -480,6 +491,7 @@ function parseFETTimeSection(section: SectionSlice): ImportedFETTime {
   const iTime = findCol(headers, ["Time (s)", "time_s", "time"]);
   const iId2 = findCol(headers, ["Id (µA)", "Id_uA", "id"]);
   const iMarker = findCol(headers, ["Marker", "marker"]);
+  const iOor = findCol(headers, ["Out of range", "out_of_range"]);
 
   interface Group {
     id: string;
@@ -511,7 +523,7 @@ function parseFETTimeSection(section: SectionSlice): ImportedFETTime {
       if (Number.isFinite(c)) g.concentration = c;
     }
     if (isMarker) g.markers.push({ time, label: markerCell });
-    else g.points.push({ time, id });
+    else g.points.push({ time, id, ...(readOutOfRange(r, iOor) ? { outOfRange: true as const } : {}) });
   }
   return { mode: "fet_time", measurements: order.map((k) => map.get(k)!), skipped };
 }
