@@ -1415,8 +1415,18 @@ void dispatchCommand(const String &line) {
       // A line that stops before its closing brace was cut on the way in (a receive buffer
       // that was too small), not mistyped. Say so, and tell the app instead of staying silent.
       Serial.printf("[CMD] command truncated (%u bytes received)\n", (unsigned)line.length());
+      const char *msg = "the start command arrived cut short and was ignored; send it again";
       const char *type = errorTypeOfCommandText(line);
-      if (type) sendSweepError(type, "the start command arrived cut short and was ignored; send it again");
+      if (type) {
+        sendSweepError(type, msg);
+      } else if (line.indexOf("\"start_eis\"") >= 0) {
+        // EIS reports its errors as a status, not as an eis_error message.
+        JsonDocument err;
+        err["type"] = "eis_status";
+        err["status"] = "error";
+        err["message"] = msg;
+        sendJson(err);
+      }
     } else {
       Serial.printf("[CMD] Invalid JSON ignored: %s\n", line.c_str());
     }

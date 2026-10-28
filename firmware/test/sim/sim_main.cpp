@@ -743,8 +743,12 @@ int main() {
   run("{\"command\":\"start_fet\",\"vgMin\":-0.5,\"vgMa");
   CHECK(parse("fet_error").size() == 1);
   reset();
-  run("{\"command\":\"start_eis\",\"freqMin\":0.1,\"fre");   // no eis_error exists in the app: only the message
-  CHECK(logHas("command truncated") && parse("eis_error").empty());
+  run("{\"command\":\"start_eis\",\"freqMin\":0.1,\"fre");   // EIS reports an error as an eis_status
+  CHECK(logHas("command truncated"));
+  {
+    auto st = parse("eis_status");
+    CHECK(st.size() == 1 && std::string((const char *)(st[0].doc["status"] | "")) == "error", "an eis_status error is sent");
+  }
   reset();
   run("{\"command\":\"start_cv\",\"scanRate\":}");              // closed but not valid: still the generic message
   CHECK(logHas("Invalid JSON ignored") && !logHas("truncated") && parse("cv_error").empty());
