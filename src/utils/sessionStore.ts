@@ -2,6 +2,7 @@ import type { EISDataPoint, FETTransferPoint, FETTimePoint } from "@/hooks/useSi
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
 import type { MeasurementNotes } from "./measurementNotes";
+import type { InstrumentSettings } from "./instrumentSettings";
 
 export interface StoredEISMeasurement {
   id: string;
@@ -19,6 +20,12 @@ export interface StoredEISMeasurement {
   measurementTimestamp?: number;
   /** Optional logbook metadata. Older entries may store a plain string. */
   notes?: MeasurementNotes | string;
+  /**
+   * The instrument settings that reproduce the measurement (what was requested, and what the device
+   * reported: its calibration, the out-of-range count, the EIS point counts). Absent on measurements
+   * stored before they were kept; exported as N/A then.
+   */
+  instrument?: InstrumentSettings;
   params: {
     freqMin: number;
     freqMax: number;
@@ -99,6 +106,12 @@ export interface StoredFETMeasurement {
   measurementId?: string;
   measurementTimestamp?: number;
   notes?: MeasurementNotes | string;
+  /**
+   * The instrument settings that reproduce the measurement (what was requested, and what the device
+   * reported: its calibration, the out-of-range count, the EIS point counts). Absent on measurements
+   * stored before they were kept; exported as N/A then.
+   */
+  instrument?: InstrumentSettings;
   params: {
     vgMin: number;
     vgMax: number;
@@ -154,6 +167,12 @@ export interface StoredCVMeasurement {
   measurementId: string;
   measurementTimestamp: number;
   notes?: MeasurementNotes;
+  /**
+   * The instrument settings that reproduce the measurement (what was requested, and what the device
+   * reported: its calibration, the out-of-range count, the EIS point counts). Absent on measurements
+   * stored before they were kept; exported as N/A then.
+   */
+  instrument?: InstrumentSettings;
   params: {
     scanRate: number;
     eStart: number;
@@ -189,6 +208,12 @@ export interface StoredSWVMeasurement {
   measurementId?: string;
   measurementTimestamp?: number;
   notes?: MeasurementNotes | string;
+  /**
+   * The instrument settings that reproduce the measurement (what was requested, and what the device
+   * reported: its calibration, the out-of-range count, the EIS point counts). Absent on measurements
+   * stored before they were kept; exported as N/A then.
+   */
+  instrument?: InstrumentSettings;
   params: import("@/types/swv").SWVParameters;
   data: import("@/types/swv").SWVDataPoint[];
   correctedData?: import("@/types/swv").SWVDataPoint[];

@@ -328,6 +328,7 @@ int main() {
     auto *running = findType(msgs, "eis_status");
     CHECK(running && std::fabs(running->doc["amplitude"].as<double>() - 10.0) < 1e-3);
     CHECK(running && running->doc["amplitudeClamped"].as<bool>() == false);
+    CHECK(running && std::fabs(running->doc["rcalOhms"].as<double>() - 10000.0) < 1e-3, "the EIS status reports RCAL");
   }
 
   std::printf("T11 EIS: a stop 7 s in ends the sweep after the point in progress, then a new sweep starts\n");
@@ -637,6 +638,7 @@ int main() {
       CHECK(std::fabs(r->doc["currentOffsetUa"].as<double>() + 2.7) < 1e-4);
       CHECK(std::fabs(r->doc["potentialOffsetMv"].as<double>() - 45.0) < 1e-4);
       CHECK(std::fabs(r->doc["vzeroV"].as<double>() - 1.3) < 1e-4);
+      CHECK(std::fabs(r->doc["rcalOhms"].as<double>() - 10000.0) < 1e-3, "the CV status reports RCAL");
     }
     checkCvOnSchedule(100.0, 801);     // the calibration comes before the sweep: its timing is unchanged
     checkOff("CV with the calibration");

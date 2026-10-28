@@ -3,6 +3,7 @@ import type { EISDataPoint, FETTransferPoint, FETTimePoint } from "./useSimulate
 import type { CVDataPoint } from "./useSimulatedCVData";
 import { parseCVWebSocketMessage } from "./useSimulatedCVData";
 import type { SWVDataPoint } from "@/types/swv";
+import type { DeviceRunInfo } from "@/utils/instrumentSettings";
 
 /**
  * ============================================================
@@ -121,6 +122,16 @@ interface UseWebSocketDataReturn {
   swvError: string | null;
 
   /**
+   * What the device reported about the sweep in progress or the last one, per technique: the
+   * fields of its "running" status (the calibration of a CV, SWV or BioFET sweep, the RCAL value,
+   * the amplitude after the clamp of an EIS sweep) and of its done message (out-of-range count,
+   * EIS points sent, skipped and flagged). Empty until it says so, and cleared at every start.
+   */
+  eisDeviceInfo: DeviceRunInfo;
+  fetDeviceInfo: DeviceRunInfo;
+  cvDeviceInfo: DeviceRunInfo;
+  swvDeviceInfo: DeviceRunInfo;
+  /**
    * The id of the sweep of each technique, new at every start command sent (0 before the
    * first). Data and status of the sweep before are never mixed into the current one.
    */
@@ -151,6 +162,12 @@ export function useWebSocketData(): UseWebSocketDataReturn {
   const [swvStatus, setSwvStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [swvError, setSwvError] = useState<string | null>(null);
   const swvIndexRef = useRef(0);
+  const [deviceInfo, setDeviceInfo] = useState<Record<SweepTechnique, DeviceRunInfo>>({ eis: {}, fet: {}, cv: {}, swv: {} });
+  /** Keep the fields of a "running" status or of a done message of a technique (without type and status). */
+  const keepDeviceInfo = (technique: SweepTechnique, part: "running" | "done", msg: Record<string, unknown>) => {
+    const { type: _type, status: _status, ...fields } = msg;
+    setDeviceInfo((prev) => ({ ...prev, [technique]: { ...prev[technique], [part]: fields } }));
+  };
   const [sweepIds, setSweepIds] = useState<Record<SweepTechnique, number>>({ eis: 0, fet: 0, cv: 0, swv: 0 });
   const gatesRef = useRef<Record<SweepTechnique, SweepGate>>(newGates());
 
@@ -278,6 +295,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             // second is a no-op because the state is already "done".
             case "eis_done":
               if (fromPreviousSweep("eis")) break;
+              keepDeviceInfo("eis", "done", msg);
               setEisStatus("done");
               break;
 
@@ -286,12 +304,14 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 const s: SweepDeviceStatus = msg.status;
                 if (s === "running" || s === "error") sweepAnnounced("eis");
                 else if (fromPreviousSweep("eis")) break;
+                if (s === "running") keepDeviceInfo("eis", "running", msg);
                 setEisStatus((prev) => nextSweepStatus(prev, s));
               }
               break;
 
             case "fet_done":
               if (fromPreviousSweep("fet")) break;
+              keepDeviceInfo("fet", "done", msg);
               setFetStatus("done");
               break;
 
@@ -300,6 +320,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
                 const s: SweepDeviceStatus = msg.status;
                 if (s === "running" || s === "error") sweepAnnounced("fet");
                 else if (fromPreviousSweep("fet")) break;
+                if (s === "running") keepDeviceInfo("fet", "running", msg);
                 setFetStatus((prev) => nextSweepStatus(prev, s));
               }
               break;
@@ -320,6 +341,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               if (s === "idle" || s === "running" || s === "done" || s === "error") {
                 if (s === "running" || s === "error") sweepAnnounced("cv");
                 else if (fromPreviousSweep("cv")) break;
+                if (s === "running") keepDeviceInfo("cv", "running", msg);
                 setCvStatus(s);
                 if (s !== "error") setCvError(null);
               }
@@ -328,6 +350,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
 
             case "cv_done":
               if (fromPreviousSweep("cv")) break;
+              keepDeviceInfo("cv", "done", msg);
               setCvStatus("done");
               break;
 
@@ -387,6 +410,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
               if (s === "idle" || s === "running" || s === "done" || s === "error") {
                 if (s === "running" || s === "error") sweepAnnounced("swv");
                 else if (fromPreviousSweep("swv")) break;
+                if (s === "running") keepDeviceInfo("swv", "running", msg);
                 setSwvStatus(s);
                 if (s !== "error") setSwvError(null);
               }
@@ -395,6 +419,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
 
             case "swv_done":
               if (fromPreviousSweep("swv")) break;
+              keepDeviceInfo("swv", "done", msg);
               setSwvStatus("done");
               break;
 
@@ -422,28 +447,35 @@ export function useWebSocketData(): UseWebSocketDataReturn {
     }
   }, []);
 
+  const clearDeviceInfo = useCallback((technique: SweepTechnique) => {
+    setDeviceInfo((prev) => ({ ...prev, [technique]: {} }));
+  }, []);
   const clearEIS = useCallback(() => {
+    clearDeviceInfo("eis");
     setEisData([]);
     setLastFilename("");
     setEisStatus("idle");
-  }, []);
+  }, [clearDeviceInfo]);
   const clearFET = useCallback(() => {
+    clearDeviceInfo("fet");
     setFetBaseline([]);
     setFetAnalyte([]);
     setFetTimeData([]);
     setFetStatus("idle");
-  }, []);
+  }, [clearDeviceInfo]);
   const clearCV = useCallback(() => {
+    clearDeviceInfo("cv");
     setCvData([]);
     setCvStatus("idle");
     setCvError(null);
-  }, []);
+  }, [clearDeviceInfo]);
   const clearSWV = useCallback(() => {
+    clearDeviceInfo("swv");
     setSwvData([]);
     setSwvStatus("idle");
     setSwvError(null);
     swvIndexRef.current = 0;
-  }, []);
+  }, [clearDeviceInfo]);
 
   const sendCommand = useCallback((command: string, payload?: Record<string, unknown>) => {
     if (socketRef.current?.readyState !== WebSocket.OPEN) return;
@@ -492,6 +524,10 @@ export function useWebSocketData(): UseWebSocketDataReturn {
     clearSWV,
     swvStatus,
     swvError,
+    eisDeviceInfo: deviceInfo.eis,
+    fetDeviceInfo: deviceInfo.fet,
+    cvDeviceInfo: deviceInfo.cv,
+    swvDeviceInfo: deviceInfo.swv,
     eisSweepId: sweepIds.eis,
     fetSweepId: sweepIds.fet,
     cvSweepId: sweepIds.cv,

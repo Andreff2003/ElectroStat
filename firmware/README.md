@@ -165,7 +165,8 @@ our discussion — Overlay is how you'd compare them either way.
   SWV, and of the bias for BioFET), with `[CAL] WARNING: ...` for whatever
   failed, and it is sent in the "running" status message of the sweep as the
   new fields `calibrated`, `rtiaNominalOhms`, `rtiaCalibratedOhms`,
-  `rtiaCalibrated`, `currentOffsetUa`, `potentialOffsetMv`, `vzeroV` and
+  `rtiaCalibrated`, `currentOffsetUa`, `potentialOffsetMv`, `vzeroV`, `rcalOhms` (the RCAL value this
+  firmware was built with, also in the EIS "running" status) and
   `calibrationNote`. `"calibrate": false` in the start command skips it all
   and keeps the nominal behavior. The arithmetic is tested on a PC; **none
   of it has been tested on the board**: check the `[CAL]` lines on a 1 kOhm

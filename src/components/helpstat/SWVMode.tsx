@@ -55,11 +55,14 @@ import {
 } from "@/utils/sessionStore";
 import { exportCalibrationCSV, exportSWVData } from "@/utils/csvExport";
 import { parseImportedCsv } from "@/utils/csvImport";
+import { buildInstrumentSettings, type DeviceRunInfo } from "@/utils/instrumentSettings";
 
 type LiveWs = {
   swvData?: SWVDataPoint[];
   swvStatus?: "idle" | "running" | "done" | "error";
   swvError?: string | null;
+  /** What the device reported about the sweep: its calibration, the out-of-range count. */
+  swvDeviceInfo?: DeviceRunInfo;
   clearSWV?: () => void;
   sendCommand?: (command: string, payload?: Record<string, unknown>) => void;
   status?: string;
@@ -219,6 +222,12 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
     else sim.reset();
   }, [isLive, sim, ws]);
 
+  // What was requested and what the device reported (its calibration, the out-of-range count).
+  const instrument = useMemo(
+    () => buildInstrumentSettings("swv", { rtiaOhms: params.rtiaOhms }, isLive ? ws?.swvDeviceInfo : null),
+    [params.rtiaOhms, isLive, ws?.swvDeviceInfo],
+  );
+
   const persistMeasurement = useCallback(
     (concentration?: number) => {
       if (data.length === 0) return null;
@@ -243,6 +252,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
         measurementId,
         measurementTimestamp,
         notes: sanitizeMeasurementNotes(notes) ? notes : undefined,
+        instrument,
         params,
         data,
         correctedData: corrected,
@@ -270,7 +280,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
       }
       return stored;
     },
-    [corrected, data, dataSource, measurementId, measurementTimestamp, metrics, notes, params, onSessionUpdate, demoRunning, setOverlays],
+    [corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, notes, params, onSessionUpdate, demoRunning, setOverlays],
   );
 
   // Persist + auto-capture as soon as a sweep finishes, so the overlay
@@ -300,12 +310,13 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
       measurementTimestamp,
       notes: sanitizeMeasurementNotes(notes),
       calibration,
+      instrument,
       // Derived from the params that actually ran, so the exported provenance
       // follows the model the user picked instead of a hardcoded constant.
       simulationModel: dataSource === "simulated" ? simulationModelId(params) : undefined,
     });
     toast.success("SWV CSV exported.");
-  }, [calibration, corrected, data, dataSource, measurementId, measurementTimestamp, metrics, notes, params, persistMeasurement]);
+  }, [calibration, corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, notes, params, persistMeasurement]);
 
   const addCalibrationPoint = useCallback(() => {
     if (!metrics?.peakDetected && !(metrics?.peakCurrentRaw_uA != null)) {

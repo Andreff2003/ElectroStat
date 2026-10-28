@@ -516,6 +516,7 @@ static void addCalibrationFields(JsonDocument &status, bool eConvention) {
   status["currentOffsetUa"] = gCal.currentOffsetUa;
   status["potentialOffsetMv"] = eConvention ? gCal.potentialOffsetMv : gCal.biasOffsetMv;
   status["vzeroV"] = gCal.vzeroV;
+  status["rcalOhms"] = RCAL_OHMS;
   if (gCal.note[0]) status["calibrationNote"] = gCal.note;
 }
 
@@ -676,6 +677,7 @@ void handleStartEis(JsonDocument &cmd) {
     status["status"] = "running";
     status["amplitude"] = amp.cellMv;          // mV at the cell, after any clamp
     status["amplitudeClamped"] = amp.clamped;
+    status["rcalOhms"] = RCAL_OHMS;           // the calibration resistor this firmware was built with
     sendJson(status);
   }
 

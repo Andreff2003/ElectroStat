@@ -110,6 +110,7 @@ import {
   type StoredSWVMeasurement,
 } from "@/utils/sessionStore";
 import { logActivity, clearActivityLog } from "@/utils/activityLog";
+import { buildInstrumentSettings } from "@/utils/instrumentSettings";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
 import { type DemoPhase, PHASE_ORDER, PHASE_LABEL } from "@/components/helpstat/demoPhases";
 import DashboardHeader from "@/components/helpstat/DashboardHeader";
@@ -290,6 +291,16 @@ const Index = () => {
   // Per-channel "user wants this connected" intent, drives auto-reconnect.
   const [wantConnected, setWantConnected] = useState<boolean[]>([false, false, false]);
   const exportSource: "simulated" | "live" = dataSource === "simulated" ? "simulated" : "live";
+  // The instrument settings of the measurement on screen: what the app asks for, joined with what the
+  // device reported (its calibration, the out-of-range count, the EIS point counts). See instrumentSettings.ts.
+  const eisRequest = () => ({
+    dcBias: eisParams.dcBias, amplitude: eisParams.amplitude,
+    freqMin: eisParams.freqMin, freqMax: eisParams.freqMax,
+    pointsPerDecade: eisParams.pointDensityMode === "perDecade" ? eisParams.pointsPerDecade : undefined,
+  });
+  const eisInstrument = buildInstrumentSettings("eis", eisRequest(), dataSource === "live" ? ws.eisDeviceInfo : null);
+  const cvInstrument = buildInstrumentSettings("cv", { rtiaOhms: cvParams.rtiaOhms }, dataSource === "live" ? ws.cvDeviceInfo : null);
+  const fetInstrument = buildInstrumentSettings("fet", { rtiaOhms: fetParams.rtiaOhms }, dataSource === "live" ? ws.fetDeviceInfo : null);
   /** Broadcast a command to every enabled + connected channel. */
   const broadcastCommand = (command: string, payload?: Record<string, unknown>) => {
     channels.forEach((c, i) => {
@@ -549,6 +560,7 @@ const Index = () => {
         measurementId: eisMeasurementId,
         measurementTimestamp: eisMeasurementTimestamp,
         notes: cleanEisNotes,
+        instrument: eisInstrument,
         params: {
           freqMin: eisParams.freqMin,
           freqMax: eisParams.freqMax,
@@ -872,6 +884,7 @@ const Index = () => {
       measurementId: fetMeasurementId,
       measurementTimestamp: fetMeasurementTimestamp,
       notes: cleanFetNotes,
+      instrument: fetInstrument,
       params: {
         vgMin: fetParams.vgMin,
         vgMax: fetParams.vgMax,
@@ -1148,6 +1161,7 @@ const Index = () => {
           measurementId: `${eisMeasurementId}_ch${c.id}`,
           measurementTimestamp: eisMeasurementTimestamp || now,
           ...tag,
+          instrument: buildInstrumentSettings("eis", eisRequest(), chan.eisDeviceInfo),
           params: {
             freqMin: eisParams.freqMin, freqMax: eisParams.freqMax,
             points: computeEISPointCount(eisParams), amplitude: eisParams.amplitude,
@@ -1165,6 +1179,7 @@ const Index = () => {
           measurementId: `${fetMeasurementId}_ch${c.id}`,
           measurementTimestamp: fetMeasurementTimestamp || now,
           ...tag,
+          instrument: buildInstrumentSettings("fet", { rtiaOhms: fetParams.rtiaOhms }, chan.fetDeviceInfo),
           params: {
             vgMin: fetParams.vgMin, vgMax: fetParams.vgMax,
             vgStep: fetParams.vgStep, intervalMs: fetParams.intervalMs,
@@ -1183,6 +1198,7 @@ const Index = () => {
           measurementId: `${cvMeasurementId}_ch${c.id}`,
           measurementTimestamp: cvMeasurementTimestamp || now,
           ...tag,
+          instrument: buildInstrumentSettings("cv", { rtiaOhms: cvParams.rtiaOhms }, chan.cvDeviceInfo),
           params: { ...cvParams },
           data: chan.cvData.slice(),
           metrics: computeCVMetrics(chan.cvData, {
@@ -1459,6 +1475,7 @@ const Index = () => {
       measurementId: cvMeasurementId,
       measurementTimestamp: cvMeasurementTimestamp,
       notes: cleanNotes,
+      instrument: cvInstrument,
       params: { ...cvParams },
       data: cvDataLive.slice(),
       metrics: metrics ?? null,
@@ -1473,7 +1490,7 @@ const Index = () => {
   }, [
     dataSource, cv.isRunning, cv.data, isLiveCVRunning, ws.cvData,
     cvMeasurementId, cvMeasurementTimestamp, cvParams, cvBaselineMethod, cvNotes,
-    demoRunning,
+    demoRunning, ws.cvDeviceInfo,
   ]);
 
   // CV auto-save — Multi-Channel. CV has no point-count target (scan range
@@ -2195,6 +2212,7 @@ const Index = () => {
                 notes: sanitizeMeasurementNotes(eisNotes),
                 measurementId: eisMeasurementId,
                 measurementTimestamp: eisMeasurementTimestamp,
+                instrument: eisInstrument,
                 cnlsFit,
                 randlesFit,
                 linKK,
@@ -2218,6 +2236,7 @@ const Index = () => {
                     notes: sanitizeMeasurementNotes({ ...fetNotes, analyte: fetAnalyteName }),
                     measurementId: fetMeasurementId,
                     measurementTimestamp: fetMeasurementTimestamp,
+                    instrument: fetInstrument,
                   };
                   const priorSigned = fetCalibration
                     .filter((p) => p.concentration > 0 && typeof p.deltaVt_mV_signed === "number")
@@ -2315,6 +2334,7 @@ const Index = () => {
                       notes: cleanNotes,
                       measurementId: cvMeasurementId,
                       measurementTimestamp: cvMeasurementTimestamp,
+                      instrument: cvInstrument,
                     },
                     exportSource,
                     cvPlotMode,

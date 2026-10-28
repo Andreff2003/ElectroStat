@@ -17,28 +17,37 @@
 import type { EISDataPoint, FETTransferPoint, FETTimePoint } from "@/hooks/useSimulatedData";
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { SWVDataPoint, SWVDirection } from "@/types/swv";
+import { INSTRUMENT_CSV_KEYS, parseInstrumentRows, type InstrumentSettings } from "@/utils/instrumentSettings";
 
 export interface ImportedEISMeasurement {
   id: string;
   channelLabel?: string;
+  /** Instrument settings written by the export (absent in a file from before they were kept). */
+  instrument?: InstrumentSettings;
   concentration: number | null;
   points: EISDataPoint[];
 }
 export interface ImportedCVMeasurement {
   id: string;
   channelLabel?: string;
+  /** Instrument settings written by the export (absent in a file from before they were kept). */
+  instrument?: InstrumentSettings;
   concentration: number | null;
   points: CVDataPoint[];
 }
 export interface ImportedSWVMeasurement {
   id: string;
   channelLabel?: string;
+  /** Instrument settings written by the export (absent in a file from before they were kept). */
+  instrument?: InstrumentSettings;
   concentration: number | null;
   points: SWVDataPoint[];
 }
 export interface ImportedFETTransferMeasurement {
   id: string;
   channelLabel?: string;
+  /** Instrument settings written by the export (absent in a file from before they were kept). */
+  instrument?: InstrumentSettings;
   concentration: number | null;
   baseline: FETTransferPoint[];
   analyte: FETTransferPoint[];
@@ -46,6 +55,8 @@ export interface ImportedFETTransferMeasurement {
 export interface ImportedFETTimeMeasurement {
   id: string;
   channelLabel?: string;
+  /** Instrument settings written by the export (absent in a file from before they were kept). */
+  instrument?: InstrumentSettings;
   concentration: number | null;
   points: FETTimePoint[];
   markers: { time: number; label: string }[];
@@ -160,6 +171,37 @@ function findCol(headers: string[], candidates: string[]): number {
     if (i >= 0) return i;
   }
   return -1;
+}
+
+/**
+ * The instrument settings of each measurement of an export, by measurement id: the rows of the
+ * settings (rtia_requested_ohms, calibration_run, dc_bias_V, ...) that follow a measurement_id row,
+ * in the metadata block of a single export or in an INSTRUMENT SETTINGS block of a session.
+ */
+function readInstrumentSettings(lines: string[], delim: string): Map<string, InstrumentSettings> {
+  const keys = new Set(INSTRUMENT_CSV_KEYS);
+  const rowsById = new Map<string, [string, string][]>();
+  let currentId: string | null = null;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const cells = splitCsvRow(line, delim);
+    const nonEmpty = cells.filter((c) => c.trim() !== "").length;
+    if (cells[0].trim() === "measurement_id" && nonEmpty === 2) {
+      currentId = cells[1].trim();
+      continue;
+    }
+    if (currentId && nonEmpty >= 1 && keys.has(cells[0].trim())) {
+      const rows = rowsById.get(currentId) ?? [];
+      rows.push([cells[0], cells[1] ?? ""]);
+      rowsById.set(currentId, rows);
+    }
+  }
+  const out = new Map<string, InstrumentSettings>();
+  for (const [id, rows] of rowsById) {
+    const settings = parseInstrumentRows(rows);
+    if (Object.keys(settings).length > 0) out.set(id, settings);
+  }
+  return out;
 }
 
 function stripBOM(s: string): string {
@@ -518,6 +560,17 @@ export function parseImportedCsv(
     expectedMode === "cv" ? parseCVSection(s) :
     expectedMode === "swv" ? parseSWVSection(s) :
     expectedMode === "fet_transfer" ? parseFETTransferSection(s) : parseFETTimeSection(s);
+
+  const instrument = readInstrumentSettings(lines, delim);
+  if (instrument.size > 0) {
+    // A single export whose RAW rows have no measurement id (SWV) is read as one measurement under a
+    // fallback id; its settings are the only block of the file.
+    const only = instrument.size === 1 ? [...instrument.values()][0] : undefined;
+    for (const m of result.measurements as { id: string; instrument?: InstrumentSettings }[]) {
+      const found = instrument.get(m.id) ?? (m.id === FALLBACK_ID ? only : undefined);
+      if (found) m.instrument = found;
+    }
+  }
 
   const totalPoints =
     result.mode === "fet_transfer"

@@ -26,6 +26,7 @@ import {
 } from "@/utils/measurementNotes";
 import type { CVMeasurementNotes } from "@/utils/cvMeasurementNotes";
 import type { StoredMeasurement } from "./sessionStore";
+import { instrumentRows, type InstrumentSettings, type InstrumentTechnique } from "./instrumentSettings";
 import { getActivityLog, type ActivityEntry } from "./activityLog";
 
 /** Normalise a possibly-legacy `notes` field (string or object) for compact CSV display. */
@@ -683,6 +684,13 @@ export interface ModeExportMetadata {
   notes?: MeasurementNotes;
   measurementId?: string;
   measurementTimestamp?: number;
+  /** Instrument settings of the measurement (see instrumentSettings.ts), written to the metadata block. */
+  instrument?: InstrumentSettings;
+}
+
+/** The key/value rows of the instrument settings, N/A for what is not known. */
+function instrumentMetaRows(technique: InstrumentTechnique, s: InstrumentSettings | null | undefined): string[] {
+  return instrumentRows(technique, s).map(([k, v]) => toRow([k, v]));
 }
 
 /**
@@ -716,6 +724,7 @@ function buildNotesMetaSection(
     toRow(["pH", fmtSig(n?.pH)]),
     toRow(["tags", n?.tags && n.tags.length > 0 ? n.tags.join("|") : "N/A"]),
     toRow(["notes", sanitizeNotesForCSV(n?.notes)]),
+    ...instrumentMetaRows(technique === "EIS" ? "eis" : "fet", meta.instrument),
   ];
   return rows.join("\n");
 }
@@ -848,12 +857,13 @@ function buildEISWarburgSection(wb: import("./randlesFit").WarburgResult | null 
   return lines.join("\n");
 }
 
-export function exportEISData(
+/** Pure builder of the single-measurement EIS export (see exportEISData). */
+export function buildEISExportText(
   data: EISDataPoint[],
   source: ExportSource = "simulated",
   meta: ModeExportMetadata & EISExportFitOptions = {},
-) {
-  const now = Date.now();
+  now: number = Date.now(),
+): string {
   const id = meta.measurementId ?? `eis_${now}`;
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const rawLines = [sectionHeader("RAW EIS DATA"), toRow(RAW_EIS_HEADERS)];
@@ -872,7 +882,16 @@ export function exportEISData(
     buildEISLinKKSection(meta.linKK ?? null),
     buildEISWarburgSection(meta.warburg ?? null),
   ].join(BLANK);
-  downloadTSV(`eis_data_${now}.tsv`, out);
+  return out;
+}
+
+export function exportEISData(
+  data: EISDataPoint[],
+  source: ExportSource = "simulated",
+  meta: ModeExportMetadata & EISExportFitOptions = {},
+) {
+  const now = Date.now();
+  downloadTSV(`eis_data_${now}.tsv`, buildEISExportText(data, source, meta, now));
 }
 
 
@@ -970,10 +989,10 @@ export interface FETDataExportArgs {
   responseSign?: 1 | -1;
 }
 
-export function exportFETData(args: FETDataExportArgs) {
+/** Pure builder of the combined BioFET export (see exportFETData). */
+export function buildFETExportText(args: FETDataExportArgs, now: number = Date.now()): string {
   const source = args.source ?? "simulated";
   const meta = args.meta ?? {};
-  const now = Date.now();
   const id = meta.measurementId ?? `fet_${now}`;
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const conc = args.concentration ?? null;
@@ -1043,26 +1062,82 @@ export function exportFETData(args: FETDataExportArgs) {
     rawTime.join("\n"),
     procRows.join("\n"),
   ].join(BLANK);
-  downloadTSV(`fet_data_${now}.tsv`, out);
+  return out;
 }
 
-export function exportSessionCSV(
+export function exportFETData(args: FETDataExportArgs) {
+  const now = Date.now();
+  downloadTSV(`fet_data_${now}.tsv`, buildFETExportText(args, now));
+}
+
+/**
+ * The instrument settings of a stored measurement: what its parameters say, overlaid with what was
+ * stored (see StoredMeasurement.instrument). A measurement stored before the settings were kept
+ * still gives its requested parameters and N/A for what only the device reports.
+ */
+export function instrumentSettingsOf(m: StoredMeasurement): InstrumentSettings {
+  if (m.mode === "eis") {
+    return {
+      dcBias: m.params.dcBias, amplitude: m.params.amplitude,
+      freqMin: m.params.freqMin, freqMax: m.params.freqMax,
+      pointsPerDecade: m.params.pointsPerDecade,
+      ...m.instrument,
+    };
+  }
+  if (m.mode === "cv") {
+    return { rtiaOhms: (m.params as { rtiaOhms?: number }).rtiaOhms, ...m.instrument };
+  }
+  if (m.mode === "swv") return { rtiaOhms: m.params.rtiaOhms, ...m.instrument };
+  return { ...m.instrument };
+}
+
+/** The id the RAW rows of a stored measurement carry, which ties a settings block to its data. */
+function rawIdOf(m: StoredMeasurement): string {
+  return m.mode === "cv" || m.mode === "swv" ? (m.measurementId ?? m.id) : m.id;
+}
+
+/** One INSTRUMENT SETTINGS block per measurement of the session, for every technique. */
+function buildSessionInstrumentSettings(measurements: StoredMeasurement[]): string {
+  if (measurements.length === 0) return "";
+  const blocks: string[] = [];
+  for (const m of measurements) {
+    const id = rawIdOf(m);
+    blocks.push([
+      sectionHeader(`INSTRUMENT SETTINGS — ${id}`),
+      toRow(["measurement_id", id]),
+      toRow(["mode", m.mode]),
+      ...instrumentMetaRows(m.mode, instrumentSettingsOf(m)),
+    ].join("\n"));
+  }
+  return blocks.join(BLANK);
+}
+
+/** Pure builder of the session export (see exportSessionCSV). */
+export function buildSessionExportText(
   measurements: StoredMeasurement[],
   options: { source?: ExportSource; calibration?: CalibrationExportPoint[] } = {},
-) {
+): string {
   const source = options.source ?? "simulated";
   const calibration = options.calibration ?? [];
   const cvBlock = buildSessionCVMetaAndMetrics(measurements);
+  const instrumentBlock = buildSessionInstrumentSettings(measurements);
   const sections = [
     metaRow(measurements.length, source),
     buildRawSection(measurements),
     buildProcessedSection(measurements),
   ];
   if (cvBlock) sections.push(cvBlock);
+  if (instrumentBlock) sections.push(instrumentBlock);
   sections.push(buildCalibrationSection(calibration));
   sections.push(buildActivitySection());
-  const out = sections.join(BLANK);
-  downloadTSV(`electrostat_session_${Date.now()}.tsv`, out);
+  return sections.join(BLANK);
+}
+
+export function exportSessionCSV(
+  measurements: StoredMeasurement[],
+  options: { source?: ExportSource; calibration?: CalibrationExportPoint[] } = {},
+) {
+  downloadTSV(`electrostat_session_${Date.now()}.tsv`, buildSessionExportText(measurements, options));
 }
 
 export function exportCalibrationCSV(
@@ -1120,6 +1195,10 @@ export interface CVExportParams {
   measurementId?: string;
   /** Unix ms when the measurement started. */
   measurementTimestamp?: number;
+  /** HSTIA RTIA the app asked for, in ohms. */
+  rtiaOhms?: number;
+  /** Instrument settings of the measurement (see instrumentSettings.ts). */
+  instrument?: InstrumentSettings;
 }
 
 // sanitizeNotesForCSV imported from @/utils/measurementNotes
@@ -1219,6 +1298,7 @@ export function buildCVExportText(
       notes?.tags && notes.tags.length > 0 ? notes.tags.join("|") : "N/A",
     ]),
     toRow(["notes", sanitizeNotesForCSV(notes?.notes)]),
+    ...instrumentMetaRows("cv", { rtiaOhms: cvParams.rtiaOhms, ...cvParams.instrument }),
   ].join("\n");
   const raw = [sectionHeader("RAW CV DATA"), toRow(RAW_CV_HEADERS)];
   // Prefer the per-point baseline/Icorr from metrics.correctedData when available.
@@ -1411,6 +1491,8 @@ export interface ExportSWVOptions {
   notes?: MeasurementNotes | null;
   calibration?: CalibrationPoint[];
   simulationModel?: string;
+  /** Instrument settings of the measurement (see instrumentSettings.ts). */
+  instrument?: InstrumentSettings;
 }
 
 /**
@@ -1418,12 +1500,11 @@ export interface ExportSWVOptions {
  * CORRECTED DATA, PROCESSED SWV RESULTS and optional CALIBRATION sections.
  * All currents in µA, potentials in V, concentrations in nM.
  */
-export function exportSWVData(opts: ExportSWVOptions) {
+export function buildSWVExportText(opts: ExportSWVOptions, now: number = Date.now()): string {
   const {
     data, corrected, metrics, params, source, measurementId, measurementTimestamp,
     notes, calibration, simulationModel,
   } = opts;
-  const now = Date.now();
   const mid = measurementId ?? `swv_${now}`;
   const ts = fmtTs(measurementTimestamp ?? now);
   const cleanNotes = sanitizeMeasurementNotes(notes ?? undefined);
@@ -1469,6 +1550,7 @@ export function exportSWVData(opts: ExportSWVOptions) {
     meta.push(toRow(["notes_short", fmtStr(shortNotesSummary(cleanNotes))]));
     meta.push(toRow(["notes", fmtStr(cleanNotes.notes)]));
   }
+  meta.push(...instrumentMetaRows("swv", { rtiaOhms: params.rtiaOhms, ...opts.instrument }));
 
   const raw: string[] = [];
   raw.push(sectionHeader("RAW SWV DATA"));
@@ -1555,5 +1637,10 @@ export function exportSWVData(opts: ExportSWVOptions) {
     proc.join("\n"),
     ...(cal.length ? [cal.join("\n")] : []),
   ].join(BLANK);
-  downloadTSV(`swv_data_${now}.tsv`, out);
+  return out;
+}
+
+export function exportSWVData(opts: ExportSWVOptions) {
+  const now = Date.now();
+  downloadTSV(`swv_data_${now}.tsv`, buildSWVExportText(opts, now));
 }
