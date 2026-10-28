@@ -26,6 +26,8 @@ import {
 } from "@/utils/measurementNotes";
 import type { CVMeasurementNotes } from "@/utils/cvMeasurementNotes";
 import type { StoredMeasurement } from "./sessionStore";
+import { linKKTest } from "./linKK";
+import { fitRandlesAuto } from "./randlesFit";
 import { instrumentRows, type InstrumentSettings, type InstrumentTechnique } from "./instrumentSettings";
 import { getActivityLog, type ActivityEntry } from "./activityLog";
 
@@ -107,7 +109,7 @@ function downloadTSV(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
-function metaRow(measurementsCount: number, source: ExportSource): string {
+function metaRow(measurementsCount: number, source: ExportSource | string): string {
   return toRow([
     "ElectroStat Export",
     fmtTs(Date.now()),
@@ -857,13 +859,74 @@ function buildEISWarburgSection(wb: import("./randlesFit").WarburgResult | null 
   return lines.join("\n");
 }
 
+/** Lin-KK needs this many points (see linKKTest), the automatic Randles fit this many (see fitRandlesAuto). */
+const LINKK_MIN_POINTS = 6;
+const RANDLES_MIN_POINTS = 5;
+
+/**
+ * The fit and Lin-KK of an EIS export. What the page had on screen is kept; what it did not have (a sweep
+ * closed too early, stopped by the user, a Multi-Channel one) is computed here from the exported sweep, without
+ * its low-signal points (a point whose raw signal is too small to mean anything), or the file says why it
+ * could not be. Every row says where the numbers came from.
+ */
+function completeEISAnalysis(
+  data: EISDataPoint[],
+  meta: ModeExportMetadata & EISExportFitOptions,
+): { meta: ModeExportMetadata & EISExportFitOptions; block: string } {
+  const usable = data.filter((p) => p.lowSignal !== true);
+  const excluded = data.length - usable.length;
+  const notes: string[] = [];
+  const out = { ...meta };
+
+  let linKKSource = "on_screen";
+  if (!(meta.linKK && meta.linKK.tauCount > 0)) {
+    if (usable.length >= LINKK_MIN_POINTS) {
+      out.linKK = linKKTest(usable);
+      linKKSource = "computed_at_export";
+    } else {
+      out.linKK = null;
+      linKKSource = "not_computed";
+      notes.push(`Lin-KK not computed: ${usable.length} usable point(s), it needs at least ${LINKK_MIN_POINTS}${excluded > 0 ? ` (${excluded} low-signal point(s) left out)` : ""}`);
+    }
+  }
+
+  let randlesSource = "on_screen";
+  if (!meta.cnlsFit && !meta.randlesFit) {
+    if (usable.length >= RANDLES_MIN_POINTS) {
+      const fit = fitRandlesAuto(usable);
+      if (fit) {
+        out.randlesFit = fit;
+        randlesSource = "computed_at_export";
+      } else {
+        randlesSource = "not_computed";
+        notes.push("Randles fit not computed: the automatic fit found no semicircle in the usable points");
+      }
+    } else {
+      randlesSource = "not_computed";
+      notes.push(`Randles fit not computed: ${usable.length} usable point(s), it needs at least ${RANDLES_MIN_POINTS}${excluded > 0 ? ` (${excluded} low-signal point(s) left out)` : ""}`);
+    }
+  }
+
+  const block = [
+    sectionHeader("EIS ANALYSIS INPUT"),
+    toRow(["analysis_points_total", `${data.length}`]),
+    toRow(["analysis_points_used", `${usable.length}`]),
+    toRow(["analysis_points_excluded_low_signal", `${excluded}`]),
+    toRow(["lin_kk_source", linKKSource]),
+    toRow(["randles_fit_source", randlesSource]),
+    toRow(["analysis_notes", notes.length > 0 ? sanitizeNotesForCSV(notes.join(" | ")) : "N/A"]),
+  ].join("\n");
+  return { meta: out, block };
+}
+
 /** Pure builder of the single-measurement EIS export (see exportEISData). */
 export function buildEISExportText(
   data: EISDataPoint[],
   source: ExportSource = "simulated",
-  meta: ModeExportMetadata & EISExportFitOptions = {},
+  metaIn: ModeExportMetadata & EISExportFitOptions = {},
   now: number = Date.now(),
 ): string {
+  const { meta, block: analysisBlock } = completeEISAnalysis(data, metaIn);
   const id = meta.measurementId ?? `eis_${now}`;
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const rawLines = [sectionHeader("RAW EIS DATA"), toRow(RAW_EIS_HEADERS)];
@@ -878,6 +941,7 @@ export function buildEISExportText(
     metaRow(1, source),
     buildNotesMetaSection("EIS", source, meta, id, now),
     rawLines.join("\n"),
+    analysisBlock,
     buildEISProcessedFitSection(meta),
     buildEISLinKKSection(meta.linKK ?? null),
     buildEISWarburgSection(meta.warburg ?? null),
@@ -1096,6 +1160,23 @@ function rawIdOf(m: StoredMeasurement): string {
   return m.mode === "cv" || m.mode === "swv" ? (m.measurementId ?? m.id) : m.id;
 }
 
+/** Where a stored measurement came from. A measurement stored before the source was kept is "unknown", not "simulated". */
+export function measurementSourceOf(m: StoredMeasurement): ExportSource {
+  return m.source ?? "unknown";
+}
+
+/**
+ * The Source of the session header: the one source all measurements share, a count per source when they
+ * differ, and, for a session with no measurements, the source the caller names.
+ */
+export function sessionSourceLabel(measurements: StoredMeasurement[], fallback: ExportSource = "unknown"): string {
+  if (measurements.length === 0) return fallback;
+  const counts = new Map<ExportSource, number>();
+  for (const m of measurements) counts.set(measurementSourceOf(m), (counts.get(measurementSourceOf(m)) ?? 0) + 1);
+  if (counts.size === 1) return [...counts.keys()][0];
+  return `mixed (${[...counts].map(([k, n]) => `${k} ${n}`).join(", ")})`;
+}
+
 /** One INSTRUMENT SETTINGS block per measurement of the session, for every technique. */
 function buildSessionInstrumentSettings(measurements: StoredMeasurement[]): string {
   if (measurements.length === 0) return "";
@@ -1106,6 +1187,7 @@ function buildSessionInstrumentSettings(measurements: StoredMeasurement[]): stri
       sectionHeader(`INSTRUMENT SETTINGS — ${id}`),
       toRow(["measurement_id", id]),
       toRow(["mode", m.mode]),
+      toRow(["source", measurementSourceOf(m)]),
       ...instrumentMetaRows(m.mode, instrumentSettingsOf(m)),
     ].join("\n"));
   }
@@ -1117,12 +1199,12 @@ export function buildSessionExportText(
   measurements: StoredMeasurement[],
   options: { source?: ExportSource; calibration?: CalibrationExportPoint[] } = {},
 ): string {
-  const source = options.source ?? "simulated";
   const calibration = options.calibration ?? [];
   const cvBlock = buildSessionCVMetaAndMetrics(measurements);
   const instrumentBlock = buildSessionInstrumentSettings(measurements);
   const sections = [
-    metaRow(measurements.length, source),
+    // The source is that of the measurements, not of whatever the app is set to when the file is saved.
+    metaRow(measurements.length, sessionSourceLabel(measurements, options.source ?? "unknown")),
     buildRawSection(measurements),
     buildProcessedSection(measurements),
   ];

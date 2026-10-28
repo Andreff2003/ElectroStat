@@ -561,6 +561,7 @@ const Index = () => {
         measurementTimestamp: eisMeasurementTimestamp,
         notes: cleanEisNotes,
         instrument: eisInstrument,
+        source: exportSource,
         params: {
           freqMin: eisParams.freqMin,
           freqMax: eisParams.freqMax,
@@ -885,6 +886,7 @@ const Index = () => {
       measurementTimestamp: fetMeasurementTimestamp,
       notes: cleanFetNotes,
       instrument: fetInstrument,
+      source: exportSource,
       params: {
         vgMin: fetParams.vgMin,
         vgMax: fetParams.vgMax,
@@ -1162,6 +1164,7 @@ const Index = () => {
           measurementTimestamp: eisMeasurementTimestamp || now,
           ...tag,
           instrument: buildInstrumentSettings("eis", eisRequest(), chan.eisDeviceInfo),
+          source: "live",
           params: {
             freqMin: eisParams.freqMin, freqMax: eisParams.freqMax,
             points: computeEISPointCount(eisParams), amplitude: eisParams.amplitude,
@@ -1180,6 +1183,7 @@ const Index = () => {
           measurementTimestamp: fetMeasurementTimestamp || now,
           ...tag,
           instrument: buildInstrumentSettings("fet", { rtiaOhms: fetParams.rtiaOhms }, chan.fetDeviceInfo),
+          source: "live",
           params: {
             vgMin: fetParams.vgMin, vgMax: fetParams.vgMax,
             vgStep: fetParams.vgStep, intervalMs: fetParams.intervalMs,
@@ -1199,6 +1203,7 @@ const Index = () => {
           measurementTimestamp: cvMeasurementTimestamp || now,
           ...tag,
           instrument: buildInstrumentSettings("cv", { rtiaOhms: cvParams.rtiaOhms }, chan.cvDeviceInfo),
+          source: "live",
           params: { ...cvParams },
           data: chan.cvData.slice(),
           metrics: computeCVMetrics(chan.cvData, {
@@ -1476,6 +1481,7 @@ const Index = () => {
       measurementTimestamp: cvMeasurementTimestamp,
       notes: cleanNotes,
       instrument: cvInstrument,
+      source: exportSource,
       params: { ...cvParams },
       data: cvDataLive.slice(),
       metrics: metrics ?? null,

@@ -26,6 +26,8 @@ export interface StoredEISMeasurement {
    * stored before they were kept; exported as N/A then.
    */
   instrument?: InstrumentSettings;
+  /** Where the data came from. Absent on measurements stored before it was kept (exported as "unknown"). */
+  source?: "simulated" | "live" | "imported" | "unknown";
   params: {
     freqMin: number;
     freqMax: number;
@@ -112,6 +114,8 @@ export interface StoredFETMeasurement {
    * stored before they were kept; exported as N/A then.
    */
   instrument?: InstrumentSettings;
+  /** Where the data came from. Absent on measurements stored before it was kept (exported as "unknown"). */
+  source?: "simulated" | "live" | "imported" | "unknown";
   params: {
     vgMin: number;
     vgMax: number;
@@ -173,6 +177,8 @@ export interface StoredCVMeasurement {
    * stored before they were kept; exported as N/A then.
    */
   instrument?: InstrumentSettings;
+  /** Where the data came from. Absent on measurements stored before it was kept (exported as "unknown"). */
+  source?: "simulated" | "live" | "imported" | "unknown";
   params: {
     scanRate: number;
     eStart: number;
