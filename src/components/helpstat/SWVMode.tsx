@@ -32,7 +32,8 @@ import { simulationModelId } from "@/hooks/useSimulatedSWVData";
 import type { SWVModeState } from "@/hooks/useSWVModeState";
 import {
   analyzeSWV,
-  validateSWVParameters,
+  validateSWVParametersFor,
+  liveSWVWarnings,
 } from "@/utils/swvMetrics";
 import type {
   SWVBaselineMethod,
@@ -171,12 +172,18 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
     ? ws?.swvStatus === "running"
     : sim.isRunning;
 
-  const validation = useMemo(() => validateSWVParameters(params), [params]);
+  // In live mode the warnings of the board's settling time are added; they never block the start.
+  const validation = useMemo(() => validateSWVParametersFor(params, dataSource), [params, dataSource]);
 
   const { corrected, metrics } = useMemo(
     () => analyzeSWV(data, params.baselineMethod ?? "auto"),
     [data, params.baselineMethod],
   );
+  // The metrics as stored and exported: a live scan run above 10 Hz carries the warning with them.
+  const reportedMetrics = useMemo(() => {
+    const extra = isLive ? liveSWVWarnings(params) : [];
+    return metrics && extra.length > 0 ? { ...metrics, warnings: [...metrics.warnings, ...extra] } : metrics;
+  }, [metrics, params, isLive]);
 
 
 
@@ -256,7 +263,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
         params,
         data,
         correctedData: corrected,
-        extracted: metrics,
+        extracted: reportedMetrics ?? metrics,
       };
       if (onSessionUpdate) {
         onSessionUpdate((prev) => {
@@ -280,7 +287,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
       }
       return stored;
     },
-    [corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, notes, params, onSessionUpdate, demoRunning, setOverlays],
+    [corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, reportedMetrics, notes, params, onSessionUpdate, demoRunning, setOverlays],
   );
 
   // Persist + auto-capture as soon as a sweep finishes, so the overlay
@@ -303,7 +310,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
     exportSWVData({
       data,
       corrected,
-      metrics,
+      metrics: reportedMetrics,
       params,
       source: dataSource,
       measurementId,
@@ -316,7 +323,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
       simulationModel: dataSource === "simulated" ? simulationModelId(params) : undefined,
     });
     toast.success("SWV CSV exported.");
-  }, [calibration, corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, notes, params, persistMeasurement]);
+  }, [calibration, corrected, data, dataSource, instrument, measurementId, measurementTimestamp, metrics, reportedMetrics, notes, params, persistMeasurement]);
 
   const addCalibrationPoint = useCallback(() => {
     if (!metrics?.peakDetected && !(metrics?.peakCurrentRaw_uA != null)) {

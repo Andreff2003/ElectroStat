@@ -588,6 +588,26 @@ export interface SWVValidation {
   warnings: string[];
 }
 
+/**
+ * Live mode only: the potential of the assembled board settles with a time constant of about 23 ms (measured on
+ * a dummy cell), so a square-wave pulse reaches about 95 % of its amplitude at 5 Hz, 80 % at 10 Hz and 42 % at
+ * 25 Hz. Above this frequency the peak currents are underestimated. Simulated mode has no such limit.
+ */
+export const LIVE_SWV_MAX_FREQUENCY_HZ = 10;
+
+export function liveSWVWarnings(p: SWVParameters): string[] {
+  if (!(p.frequency_Hz > LIVE_SWV_MAX_FREQUENCY_HZ)) return [];
+  return [
+    "Live mode: above 10 Hz the board’s potential does not settle within a pulse (time constant about 23 ms). The pulse reaches about 80 % of its amplitude at 10 Hz and 42 % at 25 Hz, so peak currents are underestimated. Use 10 Hz or below.",
+  ];
+}
+
+/** The validation of the parameters; in live mode the warnings of the board's settling time are added (never an error). */
+export function validateSWVParametersFor(p: SWVParameters, dataSource: "simulated" | "live"): SWVValidation {
+  const v = validateSWVParameters(p);
+  return dataSource === "live" ? { ...v, warnings: [...v.warnings, ...liveSWVWarnings(p)] } : v;
+}
+
 export function validateSWVParameters(p: SWVParameters): SWVValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
