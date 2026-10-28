@@ -6,12 +6,12 @@ import { buildCVPointsForTest, DEFAULT_CV_PARAMS, type CVDataPoint } from "@/hoo
 import { GOLD_SPE_FERRI_FERRO_50MVS, GOLD_SPE_VERTEX_INDEX } from "./fixtures/goldSpeFerriFerro50mVs";
 
 /**
- * The cathodic peak of a measured gold-SPE CV (2.5 mM ferri/ferrocyanide, 50 mV/s, -0.3 to 0.6 V) was
- * reported as "no clear cathodic peak detected (prominence 0.94 uA is below 14.48 uA)" and the diffusion
- * coefficient was dropped. The baseline fitted to the first 15 % of the reverse branch and extrapolated
- * to the peak is wrong there: that branch starts on the curved tail of the first sweep. In "auto" the
- * line between the two ends of the reverse branch is now tried too (see resolveReverseBaseline), while a
- * trace with no peak in it (noise, a resistor, a capacitor) still gives none.
+ * The baseline of a leg after a vertex (resolveReverseBaseline). A line fitted to the first 15 % of such a leg and
+ * extrapolated to the peak, a few hundred mV away, can under-read the peak or lose it when the leg starts on a
+ * steep, curved tail. In "auto" the line between the two ends of the leg is tried too, and used when the usual
+ * baseline finds nothing or reads the peak more than 25 % below it, while a trace with no peak in it (noise, a
+ * resistor, a capacitor) still gives none. (The missing cathodic peak of the measured CV that starts at 0 V had
+ * another cause, the "return" leg: see cvReturnLeg.test.ts.)
  */
 
 const INPUT = { scanRate_mVs: 50, n: 1, cMM: 2.5, areaCm2: 0.0707 };
@@ -80,7 +80,7 @@ describe("the measured gold-SPE CV", () => {
   it("where both baselines agree the usual one is kept (nothing changes for a clean tail)", () => {
     const m = computeCVMetrics(measured(), INPUT)!;
     expect(m.baselineResolvedMethod).toBe("linear-first-15");
-    expect(m.warnings.some((w) => /Reverse-branch baseline/.test(w))).toBe(false);
+    expect(m.warnings.some((w) => /Baseline of a leg after a vertex/.test(w))).toBe(false);
   });
 });
 
@@ -104,7 +104,7 @@ describe("a steep tail after the vertex (the measured trace plus a decaying anod
       expect(m.Ipc).toBeGreaterThan(-300);
       expect(Number.isFinite(m.D_apparent)).toBe(true);
       expect(m.D_status).not.toBe("invalid");
-      expect(m.warnings.some((w) => /Reverse-branch baseline/.test(w))).toBe(true);
+      expect(m.warnings.some((w) => /Baseline of a leg after a vertex/.test(w))).toBe(true);
       expect(m.baselineResolvedMethod).toBe("mixed");
     });
   }
@@ -188,7 +188,7 @@ describe("the simulated reversible CV is not changed", () => {
     expect(m.Epc).toBeCloseTo(0.19, 3);
     expect(m.deltaEp).toBeCloseTo(58, 0);
     expect(m.baselineResolvedMethod).toBe("linear-first-15");
-    expect(m.warnings.some((w) => /Reverse-branch baseline/.test(w))).toBe(false);
+    expect(m.warnings.some((w) => /Baseline of a leg after a vertex/.test(w))).toBe(false);
   });
 });
 

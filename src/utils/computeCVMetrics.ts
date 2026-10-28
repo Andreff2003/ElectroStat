@@ -121,6 +121,38 @@ function findSwitchIdx(sample: CVDataPoint[]): { switchIdx: number; goesPositive
   return { switchIdx, goesPositive };
 }
 
+/** A leg shorter than this is the few points around a vertex, not a sweep. */
+const MIN_LEG_POINTS = 5;
+
+/**
+ * The legs of a cycle by the sign of dE/dt: a run of points whose potential keeps rising (anodic-going) or
+ * keeps falling (cathodic-going). The branch names of the data ("forward", "reverse", "return") do not decide
+ * anything here: a CV that starts between its vertices has three legs (start to vertex 1, vertex 1 to vertex 2,
+ * vertex 2 back to the start), and a peak can be on any of them. The point of a vertex ends the leg that
+ * reached it. Legs with fewer than MIN_LEG_POINTS points are left out.
+ */
+export function splitLegs(points: CVDataPoint[]): CVDataPoint[][] {
+  const legs: CVDataPoint[][] = [];
+  let cur: CVDataPoint[] = [];
+  let dir = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0) {
+      const d = points[i].E - points[i - 1].E;
+      const sgn = Math.abs(d) > 1e-9 ? Math.sign(d) : 0;
+      if (sgn !== 0 && dir !== 0 && sgn !== dir) {
+        legs.push(cur);
+        cur = [];
+      }
+      if (sgn !== 0) dir = sgn;
+    }
+    cur.push(points[i]);
+  }
+  legs.push(cur);
+  return legs.filter((l) => l.length >= MIN_LEG_POINTS);
+}
+
+const legGoesPositive = (leg: CVDataPoint[]): boolean => leg[leg.length - 1].E > leg[0].E;
+
 /** Generic linear fit y = m·x + b through the supplied segment. */
 function linearFit(seg: CVDataPoint[]): ((E: number) => number) | null {
   if (seg.length < 2) return null;
@@ -453,27 +485,28 @@ function branchPeakVerdict(
 }
 
 /**
- * Two peak currents that differ by more than this fraction of the larger one mean the baseline
- * extrapolated from the first points of the reverse branch cannot be trusted.
+ * A peak current that the baseline extrapolated from the first points of a leg after a vertex gives
+ * more than this fraction below the one the line between the two ends of the leg gives is an
+ * under-reading, and the second is used.
  */
 export const REVERSE_BASELINE_DISAGREEMENT = 0.25;
 
 /**
- * Baseline of the reverse branch, the one after the vertex. The first sweep rises from a flat
- * baseline, so a line fitted to its first points and extrapolated is right there. The reverse
- * branch starts on the decaying tail of the first sweep (and the charging transient of the
- * vertex), which is curved: a line fitted to its first 15 % and extrapolated to the peak, a few
- * hundred mV away, is wrong, up to losing the peak altogether (a measured gold-SPE CV gave "no
- * clear cathodic peak detected, prominence 0.94 µA" and the diffusion coefficient was dropped).
- * In "auto" the line between the two ends of the branch is therefore tried too, and used when
- * the usual baseline leaves no peak where it shows one, or when the two disagree about the
- * peak current by more than REVERSE_BASELINE_DISAGREEMENT. Where both agree, or neither finds
- * a peak (noise, a resistor, a capacitor), nothing changes. An explicit choice of baseline is
- * always respected.
+ * Baseline of a leg that follows a vertex (the reverse leg, the return leg). The first sweep rises
+ * from a flat baseline, so a line fitted to its first points and extrapolated is right there. A leg
+ * after a vertex starts on the decaying tail of the sweep before it (and the charging transient of
+ * the vertex), which is curved: a line fitted to its first 15 % and extrapolated to the peak, a few
+ * hundred mV away, can be well off, up to hiding the peak. In "auto" the line between the two ends
+ * of the leg is therefore tried too, and used when the usual baseline leaves no peak where it shows
+ * one, or gives a peak more than REVERSE_BASELINE_DISAGREEMENT below this one's.
+ * It is not used when the peak is in or next to the window at the end of the leg (a leg that stops
+ * inside the wave, such as a return to a start potential just past the peak): that window would be
+ * part of the wave. Where both agree, or neither finds a peak (noise, a resistor, a capacitor),
+ * nothing changes. An explicit choice of baseline is always respected.
  */
 function resolveReverseBaseline(
   rev: CVDataPoint[],
-  goesPositive: boolean,
+  kind: "anodic" | "cathodic",
   input: BaselineMethodInput,
   minProminence_uA: number,
 ): { fit: ((E: number) => number) | null; method: BranchBaselineMethod; note?: string } {
@@ -481,24 +514,26 @@ function resolveReverseBaseline(
   if (input !== "auto") return usual;
   const anchors = anchorsBaseline(rev);
   if (!anchors) return usual;
-  const kind = goesPositive ? "cathodic" : "anodic";
   const alt = branchPeakVerdict(rev, anchors, kind, minProminence_uA, true);
   if (!alt.ok || !alt.peak) return usual;
+  const window = Math.max(3, Math.round(0.1 * rev.length));
+  if (alt.peak.idx >= rev.length - 2 * window) return usual;
   const cur = branchPeakVerdict(rev, usual.fit, kind, minProminence_uA, false);
   if (cur.ok && cur.peak) {
     const a = cur.peak.Icorr;
     const b = alt.peak.Icorr;
-    if (Math.abs(a - b) <= REVERSE_BASELINE_DISAGREEMENT * Math.max(Math.abs(a), Math.abs(b))) return usual;
+    // Only an under-reading is corrected: a peak the usual baseline gives larger than the other one is kept.
+    if (Math.abs(a) >= (1 - REVERSE_BASELINE_DISAGREEMENT) * Math.abs(b)) return usual;
     return {
       fit: anchors,
       method: "linear-anchors",
-      note: `Reverse-branch baseline: the line extrapolated from its first points (${usual.method}) gave ${a.toFixed(1)} µA and the line between its two ends ${b.toFixed(1)} µA; the second was used.`,
+      note: `Baseline of a leg after a vertex: the line extrapolated from its first points (${usual.method}) gave ${a.toFixed(1)} µA, more than ${Math.round(REVERSE_BASELINE_DISAGREEMENT * 100)} % below the ${b.toFixed(1)} µA of the line between its two ends; the second was used.`,
     };
   }
   return {
     fit: anchors,
     method: "linear-anchors",
-    note: `Reverse-branch baseline: the line extrapolated from its first points (${usual.method}) left no ${kind} peak; the line between its two ends was used.`,
+    note: `Baseline of a leg after a vertex: the line extrapolated from its first points (${usual.method}) left no ${kind} peak; the line between its two ends was used.`,
   };
 }
 
@@ -524,7 +559,15 @@ export function computeCVMetrics(
   let fwd: CVDataPoint[];
   let rev: CVDataPoint[];
   let goesPositive: boolean;
-  if (hasBranches) {
+  // A CV that starts between its vertices has a third leg (back to the start): the legs are found from
+  // dE/dt, whatever the branch names say, and the first two are what "forward" and "reverse" always were.
+  const legs = splitLegs(sample);
+  const extraLegs: CVDataPoint[][] = legs.length >= 3 ? legs.slice(2) : [];
+  if (legs.length >= 3) {
+    fwd = legs[0];
+    rev = legs[1];
+    goesPositive = legGoesPositive(legs[0]);
+  } else if (hasBranches) {
     fwd = sample.filter((p) => p.branch === "forward");
     rev = sample.filter((p) => p.branch === "reverse");
     if (fwd.length < 2 || rev.length < 2) {
@@ -545,7 +588,7 @@ export function computeCVMetrics(
   // Per-branch baseline — actually evaluate candidates when "auto".
   const minPeakProminence_uA = input.minPeakProminence_uA ?? PEAK_MIN_PROMINENCE_UA;
   const fwdResolved = resolveBranchBaseline(fwd, baselineInput);
-  const revResolved = resolveReverseBaseline(rev, goesPositive, baselineInput, minPeakProminence_uA);
+  const revResolved = resolveReverseBaseline(rev, goesPositive ? "cathodic" : "anodic", baselineInput, minPeakProminence_uA);
   if (revResolved.note) warnings.push(revResolved.note);
   const fwdBase = fwdResolved.fit;
   const revBase = revResolved.fit;
@@ -599,18 +642,47 @@ export function computeCVMetrics(
 
   // If the scan goes positive first, the anodic peak lives on the forward
   // branch and the cathodic peak on the reverse branch (and vice versa).
-  const anodicBranch = goesPositive ? fwd : rev;
-  const anodicBase = goesPositive ? fwdBase : revBase;
-  const cathodicBranch = goesPositive ? rev : fwd;
-  const cathodicBase = goesPositive ? revBase : fwdBase;
+  let anodicBranch = goesPositive ? fwd : rev;
+  let anodicBase = goesPositive ? fwdBase : revBase;
+  let cathodicBranch = goesPositive ? rev : fwd;
+  let cathodicBase = goesPositive ? revBase : fwdBase;
+  let anodicTrendFree = revResolved.method === "linear-anchors" && anodicBranch === rev;
+  let cathodicTrendFree = revResolved.method === "linear-anchors" && cathodicBranch === rev;
+
+  // Further legs (the return to the start) can hold the peak the first two do not: the cathodic peak of a CV
+  // that goes 0 -> -0.3 -> 0.6 -> 0 V is on the way back, on the third leg. A leg is taken when it holds a
+  // peak that stands out and the current one does not, or a larger one.
+  extraLegs.forEach((leg, n) => {
+    const kind = legGoesPositive(leg) ? "anodic" : "cathodic";
+    const resolved = resolveReverseBaseline(leg, kind, baselineInput, minPeakProminence_uA);
+    const trendFree = resolved.method === "linear-anchors";
+    const candidate = branchPeakVerdict(leg, resolved.fit, kind, minPeakProminence_uA, trendFree);
+    if (!candidate.ok || !candidate.peak) return;
+    const holder =
+      kind === "anodic"
+        ? { branch: anodicBranch, base: anodicBase, trendFree: anodicTrendFree }
+        : { branch: cathodicBranch, base: cathodicBase, trendFree: cathodicTrendFree };
+    const current = branchPeakVerdict(holder.branch, holder.base ?? null, kind, minPeakProminence_uA, holder.trendFree);
+    if (current.ok && current.peak && Math.abs(current.peak.Icorr) >= Math.abs(candidate.peak.Icorr)) return;
+    if (kind === "anodic") {
+      anodicBranch = leg;
+      anodicBase = resolved.fit;
+      anodicTrendFree = trendFree;
+    } else {
+      cathodicBranch = leg;
+      cathodicBase = resolved.fit;
+      cathodicTrendFree = trendFree;
+    }
+    warnings.push(`The ${kind} peak is on leg ${n + 3} of the cycle (the return towards the start potential).`);
+    if (resolved.note) warnings.push(resolved.note);
+  });
 
   const anodic = findPeak(anodicBranch, anodicBase ?? null, "anodic");
   const cathodic = findPeak(cathodicBranch, cathodicBase ?? null, "cathodic");
 
   // Estimate noise from residuals on each branch and combine.
-  const revTrendFree = revResolved.method === "linear-anchors";
-  const noiseAn = branchNoise(anodicBranch, anodicBase ?? null, revTrendFree && anodicBranch === rev);
-  const noiseCa = branchNoise(cathodicBranch, cathodicBase ?? null, revTrendFree && cathodicBranch === rev);
+  const noiseAn = branchNoise(anodicBranch, anodicBase ?? null, anodicTrendFree);
+  const noiseCa = branchNoise(cathodicBranch, cathodicBase ?? null, cathodicTrendFree);
   const noise_uA = Math.max(noiseAn, noiseCa);
   // SNR must remain finite for clean simulated curves where MAD≈0. Use a
   // fixed fallback noise floor so peak detection and SNR stay coherent.
@@ -789,6 +861,34 @@ export function computeCVMetrics(
     let anyMissing = false;
     for (const [, idxs] of cycles) {
       const pts = idxs.map((i) => data[i]);
+      const legsC = splitLegs(pts);
+      if (legsC.length >= 3) {
+        // Three legs or more: a baseline per leg, the first from its start, the others as after a vertex.
+        const baseOf = new Map<CVDataPoint, ((E: number) => number) | null>();
+        legsC.forEach((leg, n) => {
+          const fit =
+            n === 0
+              ? resolveBranchBaseline(leg, baselineInput).fit
+              : resolveReverseBaseline(leg, legGoesPositive(leg) ? "anodic" : "cathodic", baselineInput, minPeakProminence_uA).fit;
+          for (const p of leg) baseOf.set(p, fit);
+        });
+        // A few points around a vertex belong to no leg: they take the baseline of the leg before them.
+        let last: ((E: number) => number) | null = null;
+        for (let k = 0; k < idxs.length; k++) {
+          const p = pts[k];
+          const own: ((E: number) => number) | null = baseOf.has(p) ? baseOf.get(p) ?? null : last;
+          last = own;
+          const i = idxs[k];
+          if (!own) {
+            correctedData[i] = { ...data[i] };
+            anyMissing = true;
+          } else {
+            const bl = own(p.E);
+            correctedData[i] = { ...data[i], baseline: bl, Icorr: p.I - bl };
+          }
+        }
+        continue;
+      }
       const hasBr = pts.some(
         (p) => p.branch === "forward" || p.branch === "reverse",
       );
@@ -809,7 +909,7 @@ export function computeCVMetrics(
       }
       const goesPositiveC = fwdC.length > 1 ? fwdC[fwdC.length - 1].E > fwdC[0].E : goesPositive;
       const fwdR = resolveBranchBaseline(fwdC, baselineInput);
-      const revR = resolveReverseBaseline(revC, goesPositiveC, baselineInput, minPeakProminence_uA);
+      const revR = resolveReverseBaseline(revC, goesPositiveC ? "cathodic" : "anodic", baselineInput, minPeakProminence_uA);
       const fwdSet = new Set(fwdC);
       for (let k = 0; k < idxs.length; k++) {
         const i = idxs[k];
