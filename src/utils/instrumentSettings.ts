@@ -152,6 +152,9 @@ export function buildInstrumentSettings(
   const run = device?.running ?? {};
   const done = device?.done ?? {};
   if (technique === "eis") {
+    // What the device says it applied (the DC bias, the amplitude at the cell after any clamp) replaces the request.
+    out.dcBias = num(run.dcBias) ?? out.dcBias;
+    out.amplitude = num(run.amplitude) ?? out.amplitude;
     out.rcalOhms = num(run.rcalOhms) ?? out.rcalOhms;
     out.pointsRequested = num(done.requested);
     out.pointsSent = num(done.points);

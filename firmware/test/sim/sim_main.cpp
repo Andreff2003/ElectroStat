@@ -329,6 +329,7 @@ int main() {
     CHECK(running && std::fabs(running->doc["amplitude"].as<double>() - 10.0) < 1e-3);
     CHECK(running && running->doc["amplitudeClamped"].as<bool>() == false);
     CHECK(running && std::fabs(running->doc["rcalOhms"].as<double>() - 10000.0) < 1e-3, "the EIS status reports RCAL");
+    CHECK(running && running->doc["dcBias"].is<float>(), "the EIS status reports the dc bias");
   }
 
   std::printf("T11 EIS: a stop 7 s in ends the sweep after the point in progress, then a new sweep starts\n");

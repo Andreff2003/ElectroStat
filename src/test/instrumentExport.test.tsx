@@ -96,7 +96,7 @@ describe("buildInstrumentSettings", () => {
     const s = buildInstrumentSettings(
       "eis",
       { dcBias: 0.15, amplitude: 10, freqMin: 0.1, freqMax: 100000, pointsPerDecade: 10 },
-      { running: { amplitude: 10, rcalOhms: 9980 }, done: { points: 58, requested: 61, skipped: 3, lowSignal: 4 } },
+      { running: { amplitude: 10, rcalOhms: 9980, dcBias: 0.15 }, done: { points: 58, requested: 61, skipped: 3, lowSignal: 4 } },
     );
     expect(s).toEqual(EIS);
   });
@@ -145,10 +145,10 @@ describe("the hook keeps what the device says about a sweep", () => {
   it("EIS: the counts of eis_done, SWV and BioFET likewise", () => {
     const result = connected();
     act(() => { result.current.sendCommand("start_eis", {}); });
-    act(() => { socket.emit({ type: "eis_status", status: "running", amplitude: 10, rcalOhms: 9980 }); });
+    act(() => { socket.emit({ type: "eis_status", status: "running", amplitude: 10, dcBias: 0.15, rcalOhms: 9980 }); });
     act(() => { socket.emit({ type: "eis_done", points: 58, requested: 61, skipped: 3, lowSignal: 4 }); });
     expect(buildInstrumentSettings("eis", {}, result.current.eisDeviceInfo)).toEqual({
-      rcalOhms: 9980, pointsRequested: 61, pointsSent: 58, pointsSkipped: 3, pointsLowSignal: 4,
+      amplitude: 10, dcBias: 0.15, rcalOhms: 9980, pointsRequested: 61, pointsSent: 58, pointsSkipped: 3, pointsLowSignal: 4,
     });
     act(() => { socket.emit({ type: "swv_status", status: "running", calibrated: false, rtiaCalibratedOhms: 10000 }); });
     act(() => { socket.emit({ type: "swv_done", points: 401, outOfRangeCount: 0 }); });
