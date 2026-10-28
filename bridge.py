@@ -272,9 +272,50 @@ async def broadcast(message: dict):
     )
 
 
+# The fields ElectroStat_Firmware.ino reads from each start command (the cmd["..."] reads of
+# its handlers). Everything else the app sends (concentration for the solvers, cell area,
+# models, Kd, ...) only drives the simulators, and the firmware's USB receive buffer used to
+# cut any line longer than 256 bytes, so only these go to the board. tests/test_bridge_payload.py
+# checks this table against the firmware source, so a field the firmware starts to read cannot
+# be left out by mistake.
+FIRMWARE_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "start_eis": ("freqMin", "freqMax", "points", "dcBias", "amplitude"),
+    "start_cv": ("eStart", "eVertex1", "eVertex2", "nCycles", "stepMv", "scanRate",
+                 "quietTime", "rtiaOhms", "calibrate"),
+    "start_swv": ("startE", "endE", "step_mV", "amplitude_mV", "frequency_Hz",
+                  "quietTime_s", "direction", "rtiaOhms", "calibrate"),
+    "start_fet": ("vgMin", "vgMax", "vgStep", "intervalMs", "concentration", "readoutBias_V",
+                  "timeDuration_s", "timeStep_s", "rtiaOhms", "calibrate"),
+}
+
+# Lines the firmware has to receive whole. Its receive buffer is 4096 bytes now, but a board
+# that still has the old firmware cuts at 256, so warn well before that.
+HARDWARE_LINE_WARN_BYTES = 240
+
+
+def hardware_payload(message: dict) -> bytes:
+    """The line sent to the board: a start command reduced to the fields the firmware reads
+    ("command" first, as the firmware's error report expects), compact JSON, newline."""
+    keep = FIRMWARE_FIELDS.get(str(message.get("command", "")))
+    if keep is not None:
+        message = {"command": message["command"], **{k: message[k] for k in keep if k in message}}
+    return (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def describe_hardware_payload(payload: bytes) -> str:
+    """The size of the line, with a warning when it could be cut on the way."""
+    size = len(payload)
+    text = f"{size} bytes"
+    if size > HARDWARE_LINE_WARN_BYTES:
+        text += f" (WARNING: more than {HARDWARE_LINE_WARN_BYTES}, a board with the old 256-byte receive buffer cuts it)"
+    return text
+
+
 async def send_to_hardware(message: dict):
     global esp32_writer, serial_conn
-    payload = (json.dumps(message) + "\n").encode("utf-8")
+    payload = hardware_payload(message)
+    sent = payload.decode("utf-8").rstrip("\n")
+    size = describe_hardware_payload(payload)
 
     if operation_mode == "wifi":
         if esp32_writer is None:
@@ -283,7 +324,7 @@ async def send_to_hardware(message: dict):
         try:
             esp32_writer.write(payload)
             await esp32_writer.drain()
-            print(f"[ESP32/WIFI] Enviado: {message}")
+            print(f"[ESP32/WIFI] Enviado ({size}): {sent}")
         except Exception as e:
             print(f"[ESP32/WIFI] Erro ao enviar: {e}")
         return
@@ -294,7 +335,7 @@ async def send_to_hardware(message: dict):
             return
         try:
             serial_conn.write(payload)
-            print(f"[ESP32/SERIAL] Enviado: {message}")
+            print(f"[ESP32/SERIAL] Enviado ({size}): {sent}")
         except Exception as e:
             print(f"[ESP32/SERIAL] Erro ao enviar: {e}")
         return
@@ -525,41 +566,21 @@ async def ws_handler(websocket):
 
                 elif command == "start_fet":
                     await cancel_active_task()
-                    params = {
-                        "vgMin": as_float(data, ["vgMin"], -0.5),
-                        "vgMax": as_float(data, ["vgMax"], 1.5),
-                        "vgStep": max(1e-6, as_float(data, ["vgStep"], 0.04)),
-                        "intervalMs": max(1, as_int(data, ["intervalMs"], 200)),
-                        "concentration": as_float(data, ["concentration", "c", "cMM"], 0.0),
-                        # Analyte / aptamer-specific parameters (fall back to the
-                        # module defaults if the frontend doesn't send them, so
-                        # older clients keep working unchanged).
-                        "kd_nM": max(1e-6, as_float(data, ["kd_nM"], KD_SIMULATED_NM)),
-                        "vtBaseline_V": as_float(data, ["vtBaseline_V"], VT_BASELINE),
-                        "deltaVtMax_V": as_float(data, ["deltaVtMax_V"], VT_MAX_SHIFT),
-                        "idMax_uA": max(1e-6, as_float(data, ["idMax_uA"], 50.0)),
-                        "idealityFactor": max(0.5, as_float(data, ["idealityFactor"], FET_SUBTHRESHOLD_N)),
-                        # Time-response (Id vs t) parameters.
-                        "bindingRate_perS": max(1e-6, as_float(data, ["bindingRate_perS"], 1.0 / FET_BINDING_TAU_S)),
-                        "readoutBias_V": as_float(data, ["readoutBias_V"], FET_VG_READ),
-                        "timeDuration_s": max(1.0, as_float(data, ["timeDuration_s"], FET_TIME_DURATION_S)),
-                        "timeStep_s": max(0.01, as_float(data, ["timeStep_s"], FET_TIME_DT_S)),
-                        "injectionTime_s": max(0.0, as_float(data, ["injectionTime_s"], FET_SAMPLE_TIME_S)),
-                        # HSTIA gain (ohms) — ignored by the simulator, forwarded to
-                        # real hardware so ElectroStat_Firmware.ino's handleStartFet
-                        # picks it up instead of always defaulting to 10k.
-                        "rtiaOhms": max(0.0, as_float(data, ["rtiaOhms"], 10000.0)),
-                    }
+                    params = parse_fet_params(data)
                     print(f"[FET] Kd={params['kd_nM']}nM  VtBase={params['vtBaseline_V']}V  "
                           f"dVtMax={params['deltaVtMax_V']}V  idMax={params['idMax_uA']}uA  n={params['idealityFactor']}")
                     if operation_mode in ("simulated", "dados_reais"):
                         active_task = asyncio.create_task(loop_fet_simulado(params))
                     else:
+                        if "calibrate" in data:
+                            params["calibrate"] = bool(data["calibrate"])
                         await send_to_hardware({"command": "start_fet", **params})
 
                 elif command == "start_cv":
                     await cancel_active_task()
                     params = parse_cv_params(data)
+                    if "calibrate" in data:   # read by the firmware; the app does not send it yet
+                        params["calibrate"] = bool(data["calibrate"])
                     if operation_mode in ("simulated", "dados_reais"):
                         active_task = asyncio.create_task(loop_cv_simulado(params))
                     else:
@@ -577,6 +598,8 @@ async def ws_handler(websocket):
                         # so "Start" always produces a usable measurement.
                         active_task = asyncio.create_task(loop_swv_simulado(params))
                     else:
+                        if "calibrate" in data:
+                            params["calibrate"] = bool(data["calibrate"])
                         await send_to_hardware({"command": "start_swv", **params})
 
                 elif command in {"stop", "stop_eis", "stop_fet", "stop_cv", "stop_swv"}:
@@ -852,6 +875,35 @@ async def sweep_fet_simulado(params: dict):
 # ══════════════════════════════════════════════════════════════
 #  MODO SIMULATED — CV
 # ══════════════════════════════════════════════════════════════
+
+def parse_fet_params(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The start_fet fields, with the defaults of the BioFET simulator."""
+    return {
+        "vgMin": as_float(data, ["vgMin"], -0.5),
+        "vgMax": as_float(data, ["vgMax"], 1.5),
+        "vgStep": max(1e-6, as_float(data, ["vgStep"], 0.04)),
+        "intervalMs": max(1, as_int(data, ["intervalMs"], 200)),
+        "concentration": as_float(data, ["concentration", "c", "cMM"], 0.0),
+        # Analyte / aptamer-specific parameters (fall back to the
+        # module defaults if the frontend doesn't send them, so
+        # older clients keep working unchanged).
+        "kd_nM": max(1e-6, as_float(data, ["kd_nM"], KD_SIMULATED_NM)),
+        "vtBaseline_V": as_float(data, ["vtBaseline_V"], VT_BASELINE),
+        "deltaVtMax_V": as_float(data, ["deltaVtMax_V"], VT_MAX_SHIFT),
+        "idMax_uA": max(1e-6, as_float(data, ["idMax_uA"], 50.0)),
+        "idealityFactor": max(0.5, as_float(data, ["idealityFactor"], FET_SUBTHRESHOLD_N)),
+        # Time-response (Id vs t) parameters.
+        "bindingRate_perS": max(1e-6, as_float(data, ["bindingRate_perS"], 1.0 / FET_BINDING_TAU_S)),
+        "readoutBias_V": as_float(data, ["readoutBias_V"], FET_VG_READ),
+        "timeDuration_s": max(1.0, as_float(data, ["timeDuration_s"], FET_TIME_DURATION_S)),
+        "timeStep_s": max(0.01, as_float(data, ["timeStep_s"], FET_TIME_DT_S)),
+        "injectionTime_s": max(0.0, as_float(data, ["injectionTime_s"], FET_SAMPLE_TIME_S)),
+        # HSTIA gain (ohms) — ignored by the simulator, forwarded to
+        # real hardware so ElectroStat_Firmware.ino's handleStartFet
+        # picks it up instead of always defaulting to 10k.
+        "rtiaOhms": max(0.0, as_float(data, ["rtiaOhms"], 10000.0)),
+    }
+
 
 def parse_cv_params(data: Dict[str, Any]) -> Dict[str, Any]:
     scan_rate = as_float(data, ["scanRate", "scanRate_mVs", "scanRateMvS"], 100.0)

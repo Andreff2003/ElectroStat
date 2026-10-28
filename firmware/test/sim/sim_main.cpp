@@ -712,6 +712,41 @@ int main() {
     CHECK(logHas("potential offset -45.0 mV"));
   }
 
+  // A command line that arrives cut (the 256-byte USB receive buffer) is reported as truncated, not
+  // as invalid JSON, and the app is told through the technique's error message.
+  std::printf("T23 a truncated command line is reported as truncated\n");
+  CHECK(Serial.rxBufferSize == 4096, "receive buffer %u", (unsigned)Serial.rxBufferSize);
+  const char *cutCv = "{\"command\":\"start_cv\",\"scanRate\":100,\"eStart\":0.6,\"eVertex1\":-0.2,\"eVertex2\":0.6,\"nCycles\":1,\"cMM\":5,\"areaCm2\":0.0707,\"n\":1,\"stepMv\":2,\"cvModel\":\"reversible\",\"noiseEnabled\":true,\"spatialNodes\":200,\"quietTime\":0,\"diffus";
+  reset();
+  run(cutCv);
+  {
+    char want[80];
+    std::snprintf(want, sizeof(want), "[CMD] command truncated (%u bytes received)", (unsigned)std::strlen(cutCv));
+    CHECK(logHas(want), "the truncated message is printed");
+    CHECK(!logHas("Invalid JSON ignored"), "it is not reported as invalid JSON");
+    auto errs = parse("cv_error");
+    CHECK(errs.size() == 1, "one cv_error, got %d", (int)errs.size());
+    if (!errs.empty()) CHECK(std::string((const char *)(errs[0].doc["message"] | "")).find("cut short") != std::string::npos);
+    CHECK(g_cal_calls == 0 && parse("cv_data").empty(), "nothing is started");
+  }
+  reset();
+  const char *cutSwv = "{\"command\":\"start_swv\",\"startE\":-0.2,\"endE\":0.6,\"step_mV\":2,\"amplit";
+  run(cutSwv);
+  {
+    char want[80];
+    std::snprintf(want, sizeof(want), "command truncated (%u bytes received)", (unsigned)std::strlen(cutSwv));
+    CHECK(parse("swv_error").size() == 1 && logHas(want));
+  }
+  reset();
+  run("{\"command\":\"start_fet\",\"vgMin\":-0.5,\"vgMa");
+  CHECK(parse("fet_error").size() == 1);
+  reset();
+  run("{\"command\":\"start_eis\",\"freqMin\":0.1,\"fre");   // no eis_error exists in the app: only the message
+  CHECK(logHas("command truncated") && parse("eis_error").empty());
+  reset();
+  run("{\"command\":\"start_cv\",\"scanRate\":}");              // closed but not valid: still the generic message
+  CHECK(logHas("Invalid JSON ignored") && !logHas("truncated") && parse("cv_error").empty());
+
   std::printf("\n%d checks, %d failed\n", checks, failures);
   return failures ? 1 : 0;
 }

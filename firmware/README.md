@@ -194,6 +194,10 @@ our discussion — Overlay is how you'd compare them either way.
   with the scan rate is a settling time. Until then the bias is only waited
   for 150 ms before the potential is measured at the start, and nothing in
   the sweep compensates for the lag.
+- **Commands are read whole, up to 4096 bytes.** `Serial.setRxBufferSize(4096)` is called before `Serial.begin()`; the default 256-byte USB receive buffer cut a
+  `start_cv` or `start_swv` from the app in the middle (`[CMD] Invalid JSON ignored: {..."diffus`). `bridge.py` also sends only the fields this firmware reads, in compact JSON,
+  and prints the size of the line (a warning above 240 bytes). A line that still arrives without its closing brace prints `[CMD] command truncated (N bytes received)`
+  and sends a `cv_error`, `swv_error` or `fet_error` to the app instead of staying silent.
 - **The cell is left unpolarized after CV, SWV and BioFET.** The AFE used
   to stay on, and the cell at the last applied potential, until the next
   command (EIS already ended with `AD5940_ShutDownS()`). With a real

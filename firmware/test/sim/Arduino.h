@@ -35,6 +35,11 @@ class String {
   bool concat(const char *c) { if (c) s += c; return true; }
   unsigned int length() const { return (unsigned)s.size(); }
   const char *c_str() const { return s.c_str(); }
+  int indexOf(const char *needle) const { size_t p = s.find(needle); return p == std::string::npos ? -1 : (int)p; }
+  bool endsWith(const char *suffix) const {
+    size_t n = std::strlen(suffix);
+    return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+  }
   void trim() {
     size_t a = s.find_first_not_of(" \t\r\n");
     size_t b = s.find_last_not_of(" \t\r\n");
@@ -53,6 +58,8 @@ class SerialClass {
  public:
   std::deque<Incoming> incoming;
   uint32_t usPerByte = 0;   // 87 models a 115200-baud UART; 0 a native USB CDC
+  size_t rxBufferSize = 256;   // the default of the USB CDC driver
+  size_t setRxBufferSize(size_t n) { rxBufferSize = n; return n; }
   void begin(unsigned long) {}
   void println(const char *c) { std::printf("  [serial] %s\n", c); }
   void println(const String &str);

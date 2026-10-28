@@ -1396,11 +1396,28 @@ void handleStop() {
   stopBackup();
 }
 
+// The error type of the technique a command line names, read from the text itself (a cut
+// line cannot be parsed, but bridge.py always writes "command" first). nullptr when unknown.
+static const char *errorTypeOfCommandText(const String &line) {
+  if (line.indexOf("\"start_cv\"") >= 0) return "cv_error";
+  if (line.indexOf("\"start_swv\"") >= 0) return "swv_error";
+  if (line.indexOf("\"start_fet\"") >= 0) return "fet_error";
+  return nullptr;
+}
+
 void dispatchCommand(const String &line) {
   JsonDocument cmd;
   DeserializationError err = deserializeJson(cmd, line);
   if (err) {
-    Serial.printf("[CMD] Invalid JSON ignored: %s\n", line.c_str());
+    if (!line.endsWith("}")) {
+      // A line that stops before its closing brace was cut on the way in (a receive buffer
+      // that was too small), not mistyped. Say so, and tell the app instead of staying silent.
+      Serial.printf("[CMD] command truncated (%u bytes received)\n", (unsigned)line.length());
+      const char *type = errorTypeOfCommandText(line);
+      if (type) sendSweepError(type, "the start command arrived cut short and was ignored; send it again");
+    } else {
+      Serial.printf("[CMD] Invalid JSON ignored: %s\n", line.c_str());
+    }
     return;
   }
   const char *command = cmd["command"] | "";
@@ -1446,6 +1463,9 @@ static void checkAd5941() {
 // ── Arduino entry points ────────────────────────────────────────
 
 void setup() {
+  // A start_cv or start_swv from the app is longer than the default 256-byte USB receive
+  // buffer, which cut it in the middle. Must be set before begin().
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);
   delay(500);
 

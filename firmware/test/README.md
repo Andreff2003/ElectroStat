@@ -15,3 +15,5 @@ that needs the board (see "First bring-up with the board" in `../README.md`).
   points (and a new sweep right after it), an ignored command, a point that comes back
   as NaN, and the amplitude clamp. The EIS loop in the stand-in follows the contract of
   `HELPStat::runSweep()` but is not the real code, which needs the AD5941. `sh sim/run_sim.sh` (needs `sim/ArduinoJson.h`, see the script).
+
+The commands the bridge sends to the board are checked by `tests/test_bridge_payload.py` (from the repository root: `py -3 -m unittest discover -s tests`): every start command from the app is shorter than 240 bytes and keeps every field this firmware reads.
