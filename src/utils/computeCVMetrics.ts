@@ -22,8 +22,11 @@ export type BaselineMethodInput =
 export type BaselineResolvedMethod =
   | "linear-first-15"
   | "linear-edges"
+  | "linear-anchors"
   | "mixed"
   | "none";
+/** What was fitted on one branch. "linear-anchors" is the line between the two ends of the reverse branch. */
+type BranchBaselineMethod = "linear-first-15" | "linear-edges" | "linear-anchors" | "none";
 export type DStatus = "valid" | "apparent" | "invalid";
 
 export interface CVMetrics {
@@ -174,7 +177,7 @@ function fitRegionSigma(
  */
 function autoPickBranchBaseline(branch: CVDataPoint[]): {
   fit: ((E: number) => number) | null;
-  method: "linear-first-15" | "linear-edges" | "none";
+  method: BranchBaselineMethod;
 } {
   if (branch.length < 4) return { fit: null, method: "none" };
   const n15 = Math.max(3, Math.floor(branch.length * 0.15));
@@ -202,7 +205,7 @@ function resolveBranchBaseline(
   input: BaselineMethodInput,
 ): {
   fit: ((E: number) => number) | null;
-  method: "linear-first-15" | "linear-edges" | "none";
+  method: BranchBaselineMethod;
 } {
   if (input === "none" || branch.length < 4) return { fit: null, method: "none" };
   if (input === "auto") return autoPickBranchBaseline(branch);
@@ -265,6 +268,8 @@ export const PEAK_MIN_WIDTH_MV = 20;
  * hundred mV, a bow spans some 70 % of it.
  */
 export const PEAK_MAX_WIDTH_FRACTION = 0.5;
+/** Smallest peak height (µA, baseline-corrected) that is ever reported, whatever the noise. */
+const FIXED_PEAK_THRESHOLD_UA = 0.05;
 
 interface PeakCandidate {
   /** Points on the branch the candidate was found on. */
@@ -386,6 +391,117 @@ function standsOut(
   return { ok: true };
 }
 
+/**
+ * The line between the two ends of a branch: the medians of a window just past the first
+ * points of the branch (which carry the charging transient of the vertex) and of a window at
+ * its end, joined by a straight line. It is interpolated across the peak, never extrapolated,
+ * so a curved tail cannot throw it off.
+ */
+function anchorsBaseline(branch: CVDataPoint[]): ((E: number) => number) | null {
+  const n = branch.length;
+  if (n < 20) return null;
+  const skip = Math.max(1, Math.round(0.05 * n));
+  const w = Math.max(3, Math.round(0.1 * n));
+  const a = branch.slice(skip, skip + w);
+  const b = branch.slice(n - w);
+  const mean = (v: number[]) => v.reduce((x, y) => x + y, 0) / v.length;
+  const median = (v: number[]) => [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)];
+  const eA = mean(a.map((p) => p.E));
+  const eB = mean(b.map((p) => p.E));
+  if (!(Math.abs(eB - eA) > 1e-9)) return null;
+  const iA = median(a.map((p) => p.I));
+  const iB = median(b.map((p) => p.I));
+  const slope = (iB - iA) / (eB - eA);
+  return (E: number) => iA + slope * (E - eA);
+}
+
+/**
+ * Noise of a branch for the peak decision. The residual of the first 15 % under a line is the
+ * usual estimate, but on the reverse branch those points are the curved tail of the first
+ * sweep and the charging transient of the vertex, which a line does not follow: the residual
+ * then measures the tail and not the noise (a measured CV gave 2.9 µA for a trace that is
+ * smooth to a fraction of a µA). Under the line between the ends of the branch the
+ * point-to-point noise, which a smooth tail does not affect, is used instead.
+ */
+function branchNoise(
+  branch: CVDataPoint[],
+  baseline: ((E: number) => number) | null,
+  trendFree: boolean,
+): number {
+  if (trendFree) {
+    const pointToPoint = pointNoiseOfBranch(branch, baseline);
+    if (pointToPoint > 0) return pointToPoint;
+  }
+  return noiseFromBranch(branch, baseline);
+}
+
+/** The peak a branch gives under a baseline, and whether it counts as one (tall enough, prominent, wide). */
+function branchPeakVerdict(
+  branch: CVDataPoint[],
+  baseline: ((E: number) => number) | null,
+  kind: "anodic" | "cathodic",
+  minProminence_uA: number,
+  trendFreeNoise: boolean,
+): { peak: PeakCandidate | null; ok: boolean } {
+  const peak = findPeak(branch, baseline, kind);
+  const noise = branchNoise(branch, baseline, trendFreeNoise);
+  const effectiveNoise = Number.isFinite(noise) && noise > 0 ? noise : FIXED_PEAK_THRESHOLD_UA / 3;
+  const threshold = Math.max(FIXED_PEAK_THRESHOLD_UA, 3 * effectiveNoise);
+  const sigma = Math.max(pointNoiseOfBranch(branch, baseline), effectiveNoise);
+  const tall = peak != null && (kind === "anodic" ? peak.Icorr > threshold : peak.Icorr < -threshold);
+  return { peak, ok: tall && standsOut(peak, sigma, minProminence_uA).ok };
+}
+
+/**
+ * Two peak currents that differ by more than this fraction of the larger one mean the baseline
+ * extrapolated from the first points of the reverse branch cannot be trusted.
+ */
+export const REVERSE_BASELINE_DISAGREEMENT = 0.25;
+
+/**
+ * Baseline of the reverse branch, the one after the vertex. The first sweep rises from a flat
+ * baseline, so a line fitted to its first points and extrapolated is right there. The reverse
+ * branch starts on the decaying tail of the first sweep (and the charging transient of the
+ * vertex), which is curved: a line fitted to its first 15 % and extrapolated to the peak, a few
+ * hundred mV away, is wrong, up to losing the peak altogether (a measured gold-SPE CV gave "no
+ * clear cathodic peak detected, prominence 0.94 µA" and the diffusion coefficient was dropped).
+ * In "auto" the line between the two ends of the branch is therefore tried too, and used when
+ * the usual baseline leaves no peak where it shows one, or when the two disagree about the
+ * peak current by more than REVERSE_BASELINE_DISAGREEMENT. Where both agree, or neither finds
+ * a peak (noise, a resistor, a capacitor), nothing changes. An explicit choice of baseline is
+ * always respected.
+ */
+function resolveReverseBaseline(
+  rev: CVDataPoint[],
+  goesPositive: boolean,
+  input: BaselineMethodInput,
+  minProminence_uA: number,
+): { fit: ((E: number) => number) | null; method: BranchBaselineMethod; note?: string } {
+  const usual = resolveBranchBaseline(rev, input);
+  if (input !== "auto") return usual;
+  const anchors = anchorsBaseline(rev);
+  if (!anchors) return usual;
+  const kind = goesPositive ? "cathodic" : "anodic";
+  const alt = branchPeakVerdict(rev, anchors, kind, minProminence_uA, true);
+  if (!alt.ok || !alt.peak) return usual;
+  const cur = branchPeakVerdict(rev, usual.fit, kind, minProminence_uA, false);
+  if (cur.ok && cur.peak) {
+    const a = cur.peak.Icorr;
+    const b = alt.peak.Icorr;
+    if (Math.abs(a - b) <= REVERSE_BASELINE_DISAGREEMENT * Math.max(Math.abs(a), Math.abs(b))) return usual;
+    return {
+      fit: anchors,
+      method: "linear-anchors",
+      note: `Reverse-branch baseline: the line extrapolated from its first points (${usual.method}) gave ${a.toFixed(1)} µA and the line between its two ends ${b.toFixed(1)} µA; the second was used.`,
+    };
+  }
+  return {
+    fit: anchors,
+    method: "linear-anchors",
+    note: `Reverse-branch baseline: the line extrapolated from its first points (${usual.method}) left no ${kind} peak; the line between its two ends was used.`,
+  };
+}
+
 export function computeCVMetrics(
   data: CVDataPoint[],
   input: CVMetricsInput,
@@ -427,8 +543,10 @@ export function computeCVMetrics(
   }
 
   // Per-branch baseline — actually evaluate candidates when "auto".
+  const minPeakProminence_uA = input.minPeakProminence_uA ?? PEAK_MIN_PROMINENCE_UA;
   const fwdResolved = resolveBranchBaseline(fwd, baselineInput);
-  const revResolved = resolveBranchBaseline(rev, baselineInput);
+  const revResolved = resolveReverseBaseline(rev, goesPositive, baselineInput, minPeakProminence_uA);
+  if (revResolved.note) warnings.push(revResolved.note);
   const fwdBase = fwdResolved.fit;
   const revBase = revResolved.fit;
   let baselineMethod: BaselineMethod;
@@ -465,7 +583,9 @@ export function computeCVMetrics(
       warnings.push(
         a === "linear-edges"
           ? "Auto baseline selected edge regions."
-          : "Auto baseline selected first-15 region.",
+          : a === "linear-anchors"
+            ? "Auto baseline selected the line between the two ends of the branch."
+            : "Auto baseline selected first-15 region.",
       );
     } else if (a !== "none" && b !== "none") {
       baselineResolvedMethod = "mixed";
@@ -488,12 +608,12 @@ export function computeCVMetrics(
   const cathodic = findPeak(cathodicBranch, cathodicBase ?? null, "cathodic");
 
   // Estimate noise from residuals on each branch and combine.
-  const noiseAn = noiseFromBranch(anodicBranch, anodicBase ?? null);
-  const noiseCa = noiseFromBranch(cathodicBranch, cathodicBase ?? null);
+  const revTrendFree = revResolved.method === "linear-anchors";
+  const noiseAn = branchNoise(anodicBranch, anodicBase ?? null, revTrendFree && anodicBranch === rev);
+  const noiseCa = branchNoise(cathodicBranch, cathodicBase ?? null, revTrendFree && cathodicBranch === rev);
   const noise_uA = Math.max(noiseAn, noiseCa);
   // SNR must remain finite for clean simulated curves where MAD≈0. Use a
   // fixed fallback noise floor so peak detection and SNR stay coherent.
-  const FIXED_PEAK_THRESHOLD_UA = 0.05;
   const effectiveNoise_uA =
     Number.isFinite(noise_uA) && noise_uA > 0
       ? noise_uA
@@ -509,7 +629,7 @@ export function computeCVMetrics(
   );
   // A candidate has to be tall enough (above) and also stand out from the local
   // baseline by a minimum prominence and be several points wide, or it is noise.
-  const minProminence_uA = input.minPeakProminence_uA ?? PEAK_MIN_PROMINENCE_UA;
+  const minProminence_uA = minPeakProminence_uA;
   const anodicSigma = Math.max(pointNoiseOfBranch(anodicBranch, anodicBase ?? null), effectiveNoise_uA);
   const cathodicSigma = Math.max(pointNoiseOfBranch(cathodicBranch, cathodicBase ?? null), effectiveNoise_uA);
   const anodicShape = standsOut(anodic, anodicSigma, minProminence_uA);
@@ -687,8 +807,9 @@ export function computeCVMetrics(
         fwdC = pts.slice(0, fb.switchIdx + 1);
         revC = pts.slice(fb.switchIdx);
       }
+      const goesPositiveC = fwdC.length > 1 ? fwdC[fwdC.length - 1].E > fwdC[0].E : goesPositive;
       const fwdR = resolveBranchBaseline(fwdC, baselineInput);
-      const revR = resolveBranchBaseline(revC, baselineInput);
+      const revR = resolveReverseBaseline(revC, goesPositiveC, baselineInput, minPeakProminence_uA);
       const fwdSet = new Set(fwdC);
       for (let k = 0; k < idxs.length; k++) {
         const i = idxs[k];
