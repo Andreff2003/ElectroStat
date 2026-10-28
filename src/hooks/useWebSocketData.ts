@@ -50,6 +50,38 @@ const isSweepDeviceStatus = (s: unknown): s is SweepDeviceStatus =>
 const nextSweepStatus = (prev: SweepDeviceStatus, incoming: SweepDeviceStatus): SweepDeviceStatus =>
   incoming === "idle" && (prev === "done" || prev === "stopped") ? prev : incoming;
 
+/**
+ * Sweeps and the messages of the sweep before.
+ *
+ * The device does not number its sweeps, so the app does: every start command it sends opens a
+ * new sweep (a new sweep id, the live data of that technique cleared). The messages that arrive
+ * before the device reports the new sweep as "running" were sent for the sweep before (its last
+ * points, its "stopped" and "idle", the "idle" that bridge.py sends on a stop) and are ignored,
+ * so they cannot mix into the new sweep or end it. The device always sends "running" before the
+ * first point of a sweep. An error is never ignored (a start can fail), and if no "running"
+ * arrives within START_ACK_TIMEOUT_MS the app stops waiting and takes what comes.
+ */
+export type SweepTechnique = "eis" | "fet" | "cv" | "swv";
+export const START_ACK_TIMEOUT_MS = 10_000;
+
+interface SweepGate {
+  id: number;
+  awaitingRunning: boolean;
+  sentAt: number;
+}
+const newGates = (): Record<SweepTechnique, SweepGate> => ({
+  eis: { id: 0, awaitingRunning: false, sentAt: 0 },
+  fet: { id: 0, awaitingRunning: false, sentAt: 0 },
+  cv: { id: 0, awaitingRunning: false, sentAt: 0 },
+  swv: { id: 0, awaitingRunning: false, sentAt: 0 },
+});
+
+/** The technique a start command begins ("start_cv" is "cv"), or null for any other command. */
+export function techniqueOfStartCommand(command: string): SweepTechnique | null {
+  const m = /^start_(eis|fet|cv|swv)$/.exec(command);
+  return m ? (m[1] as SweepTechnique) : null;
+}
+
 interface UseWebSocketDataReturn {
   // Connection
   status: ConnectionStatus;
@@ -88,6 +120,15 @@ interface UseWebSocketDataReturn {
   swvStatus: "idle" | "running" | "done" | "error";
   swvError: string | null;
 
+  /**
+   * The id of the sweep of each technique, new at every start command sent (0 before the
+   * first). Data and status of the sweep before are never mixed into the current one.
+   */
+  eisSweepId: number;
+  fetSweepId: number;
+  cvSweepId: number;
+  swvSweepId: number;
+
   // Send commands to ESP32
   sendCommand: (command: string, payload?: Record<string, unknown>) => void;
 }
@@ -110,6 +151,23 @@ export function useWebSocketData(): UseWebSocketDataReturn {
   const [swvStatus, setSwvStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [swvError, setSwvError] = useState<string | null>(null);
   const swvIndexRef = useRef(0);
+  const [sweepIds, setSweepIds] = useState<Record<SweepTechnique, number>>({ eis: 0, fet: 0, cv: 0, swv: 0 });
+  const gatesRef = useRef<Record<SweepTechnique, SweepGate>>(newGates());
+
+  /** True while a message for this technique can only belong to the sweep before the one just started. */
+  const fromPreviousSweep = (technique: SweepTechnique): boolean => {
+    const gate = gatesRef.current[technique];
+    if (!gate.awaitingRunning) return false;
+    if (Date.now() - gate.sentAt >= START_ACK_TIMEOUT_MS) {
+      gate.awaitingRunning = false;
+      return false;
+    }
+    return true;
+  };
+  /** The device has reported the new sweep (running) or failed to start it (error). */
+  const sweepAnnounced = (technique: SweepTechnique) => {
+    gatesRef.current[technique].awaitingRunning = false;
+  };
 
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -154,6 +212,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
 
           switch (msg.type) {
             case "eis": {
+              if (fromPreviousSweep("eis")) break;
               if (msg.filename) setLastFilename(msg.filename);
               const zReal = Number(msg.zReal);
               const zImag = Number(msg.zImag);
@@ -186,6 +245,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             }
 
             case "fet_transfer": {
+              if (fromPreviousSweep("fet")) break;
               const vg = Number(msg.vg);
               const id = Number(msg.id);
               const curve = msg.curve;
@@ -201,6 +261,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             }
 
             case "fet_time": {
+              if (fromPreviousSweep("fet")) break;
               const time = Number(msg.time);
               const id = Number(msg.id);
               if (!Number.isFinite(time) || time < 0 || !Number.isFinite(id)) {
@@ -216,28 +277,35 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             // "done" at the end of a sweep. Either one marks the end, and the
             // second is a no-op because the state is already "done".
             case "eis_done":
+              if (fromPreviousSweep("eis")) break;
               setEisStatus("done");
               break;
 
             case "eis_status":
               if (isSweepDeviceStatus(msg.status)) {
                 const s: SweepDeviceStatus = msg.status;
+                if (s === "running" || s === "error") sweepAnnounced("eis");
+                else if (fromPreviousSweep("eis")) break;
                 setEisStatus((prev) => nextSweepStatus(prev, s));
               }
               break;
 
             case "fet_done":
+              if (fromPreviousSweep("fet")) break;
               setFetStatus("done");
               break;
 
             case "fet_status":
               if (isSweepDeviceStatus(msg.status)) {
                 const s: SweepDeviceStatus = msg.status;
+                if (s === "running" || s === "error") sweepAnnounced("fet");
+                else if (fromPreviousSweep("fet")) break;
                 setFetStatus((prev) => nextSweepStatus(prev, s));
               }
               break;
 
             case "cv_data": {
+              if (fromPreviousSweep("cv")) break;
               const pt = parseCVWebSocketMessage(msg);
               if (!pt) {
                 console.warn("[ws] cv_data ignored — invalid frame", msg);
@@ -250,6 +318,8 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             case "cv_status": {
               const s = msg.status;
               if (s === "idle" || s === "running" || s === "done" || s === "error") {
+                if (s === "running" || s === "error") sweepAnnounced("cv");
+                else if (fromPreviousSweep("cv")) break;
                 setCvStatus(s);
                 if (s !== "error") setCvError(null);
               }
@@ -257,16 +327,19 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             }
 
             case "cv_done":
+              if (fromPreviousSweep("cv")) break;
               setCvStatus("done");
               break;
 
             case "cv_error":
+              sweepAnnounced("cv");
               setCvStatus("error");
               setCvError(typeof msg.message === "string" ? msg.message : "Unknown CV error");
               console.warn("[ws] cv_error", msg);
               break;
 
             case "swv_data": {
+              if (fromPreviousSweep("swv")) break;
               // Accept alternate field names commonly seen on ESP32 firmwares.
               const E = Number(msg.E ?? msg.e ?? msg.potential ?? msg.potential_V);
               const iFwdRaw = msg.IForward ?? msg.ifwd ?? msg.i_forward;
@@ -312,6 +385,8 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             case "swv_status": {
               const s = msg.status;
               if (s === "idle" || s === "running" || s === "done" || s === "error") {
+                if (s === "running" || s === "error") sweepAnnounced("swv");
+                else if (fromPreviousSweep("swv")) break;
                 setSwvStatus(s);
                 if (s !== "error") setSwvError(null);
               }
@@ -319,10 +394,12 @@ export function useWebSocketData(): UseWebSocketDataReturn {
             }
 
             case "swv_done":
+              if (fromPreviousSweep("swv")) break;
               setSwvStatus("done");
               break;
 
             case "swv_error":
+              sweepAnnounced("swv");
               setSwvStatus("error");
               setSwvError(typeof msg.message === "string" ? msg.message : "Unknown SWV error");
               console.warn("[ws] swv_error", msg);
@@ -342,12 +419,6 @@ export function useWebSocketData(): UseWebSocketDataReturn {
       console.warn("[ws] failed to open WebSocket", err);
       setStatus("error");
       setErrorMessage("Invalid WebSocket URL.");
-    }
-  }, []);
-
-  const sendCommand = useCallback((command: string, payload?: Record<string, unknown>) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ command, ...(payload ?? {}) }));
     }
   }, []);
 
@@ -373,6 +444,24 @@ export function useWebSocketData(): UseWebSocketDataReturn {
     setSwvError(null);
     swvIndexRef.current = 0;
   }, []);
+
+  const sendCommand = useCallback((command: string, payload?: Record<string, unknown>) => {
+    if (socketRef.current?.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({ command, ...(payload ?? {}) }));
+    // A start opens a new sweep: a new id, the data of the technique cleared, and whatever the
+    // device still says about the sweep before is ignored until it reports this one running.
+    const technique = techniqueOfStartCommand(command);
+    if (!technique) return;
+    const gate = gatesRef.current[technique];
+    gate.id += 1;
+    gate.awaitingRunning = true;
+    gate.sentAt = Date.now();
+    setSweepIds((prev) => ({ ...prev, [technique]: gate.id }));
+    if (technique === "eis") clearEIS();
+    else if (technique === "fet") clearFET();
+    else if (technique === "cv") clearCV();
+    else clearSWV();
+  }, [clearEIS, clearFET, clearCV, clearSWV]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -403,6 +492,10 @@ export function useWebSocketData(): UseWebSocketDataReturn {
     clearSWV,
     swvStatus,
     swvError,
+    eisSweepId: sweepIds.eis,
+    fetSweepId: sweepIds.fet,
+    cvSweepId: sweepIds.cv,
+    swvSweepId: sweepIds.swv,
     sendCommand,
   };
 }

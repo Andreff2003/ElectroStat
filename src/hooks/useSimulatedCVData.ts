@@ -317,6 +317,8 @@ export function useSimulatedCVData(speed: number = 40) {
   const allRef = useRef<CVDataPoint[]>([]);
   const idxRef = useRef(0);
   const [isRunning, setIsRunning] = useState(false);
+  // New at every start(), like the sweep id of the live source (useWebSocketData).
+  const [sweepId, setSweepId] = useState(0);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -346,6 +348,7 @@ export function useSimulatedCVData(speed: number = 40) {
     allRef.current = points;
     idxRef.current = 0;
     setData([]);
+    setSweepId((id) => id + 1);
     setIsRunning(true);
   }, []);
 
@@ -357,5 +360,5 @@ export function useSimulatedCVData(speed: number = 40) {
     allRef.current = [];
   }, []);
 
-  return { data, isRunning, start, stop, reset };
+  return { data, isRunning, sweepId, start, stop, reset };
 }

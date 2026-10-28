@@ -71,6 +71,8 @@ export function useSimulatedEIS(speed: number = 200) {
   const [data, setData] = useState<EISDataPoint[]>([]);
   const indexRef = useRef(0);
   const [isRunning, setIsRunning] = useState(false);
+  // New at every start(), like the sweep id of the live source (useWebSocketData).
+  const [sweepId, setSweepId] = useState(0);
   const allPoints = useRef<EISDataPoint[]>([]);
 
   const buildPoints = useCallback((concentration: number, totalPoints = 61, freqMin = 0.1, freqMax = 1e5) => {
@@ -146,6 +148,7 @@ export function useSimulatedEIS(speed: number = 200) {
     allPoints.current = buildPoints(concentration, totalPoints, freqMin, freqMax);
     setData([]);
     indexRef.current = 0;
+    setSweepId((id) => id + 1);
     setIsRunning(true);
   }, [buildPoints]);
 
@@ -159,7 +162,7 @@ export function useSimulatedEIS(speed: number = 200) {
     setIsRunning(false);
   }, []);
 
-  return { data, isRunning, start, reset, stop };
+  return { data, isRunning, sweepId, start, reset, stop };
 }
 
 /**

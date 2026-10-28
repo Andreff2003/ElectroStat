@@ -43,6 +43,8 @@ export interface UseSimulatedSWVDataReturn {
   data: SWVDataPoint[];
   isRunning: boolean;
   isComplete: boolean;
+  /** New at every start(). */
+  sweepId: number;
   start: (params: SWVParameters) => void;
   stop: () => void;
   reset: () => void;
@@ -109,6 +111,8 @@ export function useSimulatedSWVData(): UseSimulatedSWVDataReturn {
   const [data, setData] = useState<SWVDataPoint[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
+  // New at every start(), like the sweep id of the live source (useWebSocketData).
+  const [sweepId, setSweepId] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bufRef = useRef<SWVDataPoint[]>([]);
   const idxRef = useRef(0);
@@ -138,6 +142,7 @@ export function useSimulatedSWVData(): UseSimulatedSWVDataReturn {
       if (points.length === 0) return;
       bufRef.current = points;
       idxRef.current = 0;
+      setSweepId((id) => id + 1);
       setIsRunning(true);
       setIsComplete(false);
       const period_ms = Math.max(5, 1000 / params.frequency_Hz);
@@ -156,7 +161,7 @@ export function useSimulatedSWVData(): UseSimulatedSWVDataReturn {
 
   useEffect(() => () => stop(), [stop]);
 
-  return { data, isRunning, isComplete, start, stop, reset };
+  return { data, isRunning, isComplete, sweepId, start, stop, reset };
 }
 
 /**
