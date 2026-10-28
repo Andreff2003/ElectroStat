@@ -107,5 +107,5 @@ describe("CV calibration recovers the Randles-Sevcik sensitivity across a concen
     expect(median).toBeLessThan(0.5 * noiseBased);
     // and it varies by more than an order of magnitude between series, since it rests on three blanks.
     expect(sorted[7] / sorted[0]).toBeGreaterThan(10);
-  });
+  }, 30_000);   // about 5 s in the full suite, which is the default limit
 });
