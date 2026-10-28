@@ -150,8 +150,34 @@ describe("live EIS: Stop then immediate Start", () => {
     act(() => { result.current.sendCommand("start_eis"); });
     act(() => { socket.emit(eisFrame(0)); });
     expect(result.current.eisData).toHaveLength(0);
-    act(() => { vi.advanceTimersByTime(START_ACK_TIMEOUT_MS + 1); });
+    act(() => { vi.advanceTimersByTime(START_ACK_TIMEOUT_MS.eis + 1); });
     act(() => { socket.emit(eisFrame(1)); });
+    expect(result.current.eisData).toHaveLength(1);
+  });
+
+  it("the timeouts are per technique and long enough for the sweep before to end", () => {
+    expect(START_ACK_TIMEOUT_MS.eis).toBeGreaterThanOrEqual(180_000);
+    for (const t of ["cv", "swv", "fet"] as const) expect(START_ACK_TIMEOUT_MS[t]).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it("Stop during an EIS, Start, the old sweep's 'stopped' after 40 s and the new 'running' after 45 s", () => {
+    const { result, socket } = connectedHook();
+    act(() => { result.current.sendCommand("start_eis"); });
+    act(() => { socket.emit({ type: "eis_status", status: "running" }); });
+    for (let i = 0; i < 5; i++) act(() => { socket.emit(eisFrame(i)); });
+    act(() => { result.current.sendCommand("stop"); });
+    act(() => { result.current.sendCommand("start_eis"); });                  // at once
+    act(() => { vi.advanceTimersByTime(20_000); });
+    act(() => { socket.emit(eisFrame(5)); });                                   // the point in progress, finished
+    act(() => { vi.advanceTimersByTime(20_000); });                             // 40 s after the start
+    act(() => { socket.emit({ type: "eis_status", status: "stopped", points: 6 }); });
+    act(() => { socket.emit({ type: "eis_status", status: "idle" }); });
+    expect(result.current.eisStatus).toBe("idle");                              // not "stopped": it would end the new sweep
+    expect(result.current.eisData).toHaveLength(0);
+    act(() => { vi.advanceTimersByTime(5_000); });                              // 45 s
+    act(() => { socket.emit({ type: "eis_status", status: "running" }); });
+    expect(result.current.eisStatus).toBe("running");
+    act(() => { socket.emit(eisFrame(20)); });
     expect(result.current.eisData).toHaveLength(1);
   });
 

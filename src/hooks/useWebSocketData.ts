@@ -60,10 +60,18 @@ const nextSweepStatus = (prev: SweepDeviceStatus, incoming: SweepDeviceStatus): 
  * points, its "stopped" and "idle", the "idle" that bridge.py sends on a stop) and are ignored,
  * so they cannot mix into the new sweep or end it. The device always sends "running" before the
  * first point of a sweep. An error is never ignored (a start can fail), and if no "running"
- * arrives within START_ACK_TIMEOUT_MS the app stops waiting and takes what comes.
+ * arrives within START_ACK_TIMEOUT_MS of the technique the app stops waiting and takes what comes: a safety
+ * net for a device that never answers, long enough for the sweep before to end first (an EIS finishes the
+ * low-frequency point in progress, 20 to 40 s below 1 Hz, before it reports "stopped"; the others calibrate
+ * before they report "running").
  */
 export type SweepTechnique = "eis" | "fet" | "cv" | "swv";
-export const START_ACK_TIMEOUT_MS = 10_000;
+export const START_ACK_TIMEOUT_MS: Record<SweepTechnique, number> = {
+  eis: 180_000,
+  cv: 30_000,
+  swv: 30_000,
+  fet: 30_000,
+};
 
 interface SweepGate {
   id: number;
@@ -175,7 +183,7 @@ export function useWebSocketData(): UseWebSocketDataReturn {
   const fromPreviousSweep = (technique: SweepTechnique): boolean => {
     const gate = gatesRef.current[technique];
     if (!gate.awaitingRunning) return false;
-    if (Date.now() - gate.sentAt >= START_ACK_TIMEOUT_MS) {
+    if (Date.now() - gate.sentAt >= START_ACK_TIMEOUT_MS[technique]) {
       gate.awaitingRunning = false;
       return false;
     }
