@@ -555,6 +555,7 @@ export default function SWVMode({ dataSource, ws, externalParams, onChangeParams
               showBaseline={showBaseline}
               plotMode={plotMode}
               overlays={overlayMode ? overlays : []}
+              rtiaOhms={params.rtiaOhms}
             />
           </div>
 

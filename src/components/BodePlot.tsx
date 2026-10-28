@@ -5,7 +5,7 @@ import {
   Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea,
 } from "recharts";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
-import { splitForPlot, isLowSignal } from "@/utils/eisLowSignal";
+import { splitForPlot, isFlagged, markSuspectPoints } from "@/utils/eisLowSignal";
 import { LowSignalFooter } from "@/components/LowSignalFooter";
 
 interface BodePlotProps {
@@ -30,9 +30,9 @@ const BodePlot = ({ data, overlays, showLowSignal, onShowLowSignalChange, compac
   const showLow = !compact && (showLowSignal ?? localShowLow);
   const setShowLow = onShowLowSignalChange ?? setLocalShowLow;
   const split = splitForPlot(data, showLow);
-  const plotData = data
-    .filter((d) => !isLowSignal(d) || showLow)
-    .map(d => (isLowSignal(d)
+  const plotData = markSuspectPoints(data)
+    .filter((d) => !isFlagged(d) || showLow)
+    .map(d => (isFlagged(d)
       ? { freq: d.frequency, zMagLow: d.zMag, phaseLow: d.phase }
       : { freq: d.frequency, zMag: d.zMag, phase: d.phase }));
   const ovs = compact ? [] : (overlays ?? []).map((o) => ({

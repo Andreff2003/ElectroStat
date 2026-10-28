@@ -50,6 +50,13 @@ interface SignalQualityProps {
   /** SWV inputs — used when mode === "swv". */
   swvData?: SWVDataPoint[];
   swvMetrics?: SWVMetrics | null;
+  /**
+   * EIS only: the sweep has ended (completed or stopped). Until it has, the fit-based rows show a dash, not
+   * numbers computed on a sweep in progress. Omitted, the rows show what the data gives, as before.
+   */
+  eisComplete?: boolean;
+  /** A fit is running now: only then do the rows without a value say "Calculating...". */
+  fitRunning?: boolean;
 }
 
 /**
@@ -308,6 +315,18 @@ function computeSWVMetrics(
   };
 }
 
+/** Why a CV is rated poor, in words a person can act on. The electrode is mentioned only when the current is flat. */
+function cvDiagnostic(level: Level, flat: boolean, rangeBad: boolean): string {
+  if (level === "red") {
+    if (flat) return "Poor Signal — the current stays at about zero over the whole scan: check the electrode and the connections.";
+    if (rangeBad) return "Poor Signal — some points are outside the ADC window: use a lower RTIA gain.";
+    return "Poor Signal — the noise is high compared with the current: check shielding and the scan settings.";
+  }
+  if (level === "yellow") return "Acceptable Signal — usable, but check noise and scan resolution.";
+  if (level === "green") return "Good Signal.";
+  return "Waiting for measurement data...";
+}
+
 const DIAGNOSTICS: Record<Level, string> = {
   green: "Good Signal — electrode ready.",
   yellow: "Acceptable Signal — usable, but check fit/noise.",
@@ -355,7 +374,7 @@ const MetricRow = ({ label, value, level, title }: MetricRowProps & { title?: st
 );
 
 
-const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, cvMetrics, cvNElectrons = 1, cvData, swvData, swvMetrics }: SignalQualityProps) => {
+const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed, cvMetrics, cvNElectrons = 1, cvData, swvData, swvMetrics, eisComplete, fitRunning = false }: SignalQualityProps) => {
   const eisMetrics = useMemo(
     () => computeEISMetrics(eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed),
     [eisData, cnlsChiSquared, separatorZReal, separatorFreq, linKKResidualPct, linKKPassed],
@@ -366,9 +385,20 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
   );
 
   const cvStepMv = useMemo(() => estimateCVStepMv(cvData), [cvData]);
+  // Largest minus smallest raw current: tells a flat trace (nothing connected) from a quiet one.
+  const cvSpan = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of cvData ?? []) {
+      if (!Number.isFinite(p.I)) continue;
+      lo = Math.min(lo, p.I);
+      hi = Math.max(hi, p.I);
+    }
+    return hi >= lo ? hi - lo : null;
+  }, [cvData]);
   const cvLevels = useMemo(
-    () => computeCVSignalQuality(cvMetrics ?? null, { stepMv: cvStepMv, n: cvNElectrons }),
-    [cvMetrics, cvStepMv, cvNElectrons],
+    () => computeCVSignalQuality(cvMetrics ?? null, { stepMv: cvStepMv, n: cvNElectrons, currentSpan_uA: cvSpan }),
+    [cvMetrics, cvStepMv, cvNElectrons, cvSpan],
   );
 
   const swvQuality = useMemo(
@@ -394,8 +424,9 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
     : mode === "cv" ? cvLevels
     : swvQuality;
   const level: Level = worstOf([m.level, rangeLevel]);
-  const ready = m.ready;
-  const pending = "Calculating...";
+  // A row without a value shows a dash; "Calculating..." only while a fit is actually running.
+  const ready = m.ready && !(mode === "eis" && eisComplete === false);
+  const pending = fitRunning ? "Calculating..." : "—";
   const modeLabel = mode === "eis" ? "EIS" : mode === "fet" ? "BioFET" : mode === "cv" ? "CV" : "SWV";
 
 
@@ -427,8 +458,8 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
             {HEADLINES[level]}
           </div>
           <div className="text-[10px] text-muted-foreground mt-1 leading-snug">
-            {mode === "cv" && level === "yellow"
-              ? "Acceptable Signal — usable, but check peak detection, SNR and scan resolution."
+            {mode === "cv"
+              ? cvDiagnostic(level, cvLevels.currentFlat, rangeLevel === "red")
               : DIAGNOSTICS[level]}
           </div>
         </div>
@@ -480,11 +511,11 @@ const SignalQuality = ({ mode, eisData, fetBaseline, fetAnalyte, cnlsChiSquared,
         )}
         {mode === "cv" && (
           <>
-            <MetricRow label="Peaks Detected" title="Oxidation/reduction peaks found, out of 2 expected. Both found = green, one = yellow, none = red." value={cvMetrics ? `${(cvMetrics.hasAnodic ? 1 : 0) + (cvMetrics.hasCathodic ? 1 : 0)} / 2` : pending} level={cvLevels.peakLevel} />
+            <MetricRow label="Peaks" title="Oxidation and reduction peaks found, out of 2. For information only: it does not colour the light, because a dummy cell has none and a probe that is not reversible may show one." value={cvMetrics ? `${cvLevels.peaksFound} of 2 found` : pending} level="idle" />
             <MetricRow
               label="SNR (min)"
-              title="min(SNR_anodic, SNR_cathodic) — corrected peak current ÷ noise estimate. ≥10 green, ≥3 yellow, below that red."
-              value={cvMetrics ? `${Math.min(cvMetrics.SNR_anodic, cvMetrics.SNR_cathodic).toFixed(1)}` : pending}
+              title="Corrected peak current ÷ noise estimate, of the best peak found (with no peak, half the swing of the current ÷ noise). ≥10 green, ≥3 yellow, below that red."
+              value={cvMetrics && Number.isFinite(cvLevels.snr) ? `${cvLevels.snr.toFixed(1)}` : pending}
               level={cvLevels.snrLevel}
             />
             <MetricRow

@@ -295,6 +295,7 @@ function parseEISSection(section: SectionSlice): ImportedEIS {
   const iDftMag = findCol(headers, ["DFT Mag (counts)", "dftMag"]);
   const iRtia = findCol(headers, ["RTIA (Ω)", "rtiaOhms"]);
   const iLow = findCol(headers, ["Low signal", "lowSignal"]);
+  const iSuspect = findCol(headers, ["Suspect", "suspect"]);
 
   const entries: { id: string; concentration: number | null; channelLabel?: string; point: EISDataPoint }[] = [];
   let skipped = 0;
@@ -319,6 +320,7 @@ function parseEISSection(section: SectionSlice): ImportedEIS {
     if (Number.isFinite(dftMag)) point.dftMag = dftMag;
     if (Number.isFinite(rtia)) point.rtiaOhms = rtia;
     if (iLow >= 0 && (r[iLow] ?? "").trim().toLowerCase() === "yes") point.lowSignal = true;
+    if (iSuspect >= 0 && (r[iSuspect] ?? "").trim().toLowerCase() === "yes") point.suspect = true;
     entries.push({
       id: readId(r, iId),
       concentration: Number.isFinite(concRaw) ? concRaw : null,

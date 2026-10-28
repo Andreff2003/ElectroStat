@@ -1,3 +1,4 @@
+import { OutOfRangeNote, countOutOfRange, outOfRangeDots } from "@/components/OutOfRange";
 import { EmptyPlotState } from "@/components/EmptyPlotState";
 import { useState } from "react";
 import {
@@ -21,10 +22,12 @@ interface FETTimePlotProps {
   compact?: boolean;
   /** Display label for the default injection marker — e.g. "Cortisol". */
   analyteName?: string;
+  /** HSTIA RTIA in use, for the note about points outside the ADC window. */
+  rtiaOhms?: number;
 }
 
 
-const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = false, analyteName = "Analyte" }: FETTimePlotProps) => {
+const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = false, analyteName = "Analyte", rtiaOhms }: FETTimePlotProps) => {
   const overlays = compact ? [] : overlaysProp;
   const lines = markers && markers.length > 0
     ? markers
@@ -72,7 +75,7 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
   }
 
   return (
-    <div className="w-full h-full" style={{ position: "relative" }}>
+    <div className="w-full h-full flex flex-col" style={{ position: "relative" }}>
       {!compact && zoomDomain && (
         <button
           onClick={() => setZoomDomain(null)}
@@ -88,6 +91,7 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
           Reset Zoom
         </button>
       )}
+      <div className="flex-1 min-h-0">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={data}
@@ -153,11 +157,14 @@ const FETTimePlot = ({ data, markers, overlays: overlaysProp = [], compact = fal
           })}
           <Line type="monotone" dataKey="id" name="Id" stroke="hsl(200 80% 55%)" strokeWidth={2} dot={false} isAnimationActive={false} />
 
+          {!compact && outOfRangeDots(data, (p) => p.time, (p) => p.id, "fet_time_oor")}
           {!compact && isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
             <ReferenceArea x1={zoomArea.x1} x2={zoomArea.x2} strokeOpacity={0.3} fill="hsl(200 80% 55%)" fillOpacity={0.15} />
           )}
         </LineChart>
       </ResponsiveContainer>
+      </div>
+      {!compact && <OutOfRangeNote count={countOutOfRange(data)} rtiaOhms={rtiaOhms} />}
     </div>
   );
 };

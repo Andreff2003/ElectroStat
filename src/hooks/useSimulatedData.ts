@@ -33,6 +33,8 @@ export interface EISDataPoint {
   dftMag?: number;
   rtiaOhms?: number;
   lowSignal?: boolean;
+  /** The point breaks the continuity of the sweep (see markSuspectPoints). Set by the app, never by the device. */
+  suspect?: boolean;
 }
 
 export interface FETTransferPoint {

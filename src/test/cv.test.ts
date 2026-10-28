@@ -466,11 +466,31 @@ describe("computeCVSignalQuality — pure helper", () => {
     const q = computeCVSignalQuality({ ...baseMetrics, SNR_anodic: 5, SNR_cathodic: 5 });
     expect(q.level).toBe("yellow");
   });
-  it("one peak → yellow, no peaks → red", () => {
-    expect(computeCVSignalQuality({ ...baseMetrics, hasCathodic: false }).level).toBe("yellow");
-    expect(
-      computeCVSignalQuality({ ...baseMetrics, hasAnodic: false, hasCathodic: false }).level,
-    ).toBe("red");
+  it("how many peaks were found does not colour the light: they are reported on their own", () => {
+    const one = computeCVSignalQuality({ ...baseMetrics, hasCathodic: false });
+    expect(one.level).toBe("green");
+    expect(one.peaksFound).toBe(1);
+    expect(one.peakLevel).toBe("idle");
+    const none = computeCVSignalQuality(
+      { ...baseMetrics, hasAnodic: false, hasCathodic: false },
+      { currentSpan_uA: 120 },
+    );
+    expect(none.peaksFound).toBe(0);
+    expect(none.level).toBe("green");           // a dummy cell: plenty of signal, no peaks
+  });
+  it("the SNR is that of the best peak found, not of the weaker one", () => {
+    const q = computeCVSignalQuality({ ...baseMetrics, hasCathodic: false, SNR_anodic: 21, SNR_cathodic: 0.5 });
+    expect(q.snr).toBe(21);
+    expect(q.level).toBe("green");
+  });
+  it("a current that stays at about zero is the only thing reported as a connection problem", () => {
+    const flat = computeCVSignalQuality(
+      { ...baseMetrics, hasAnodic: false, hasCathodic: false, noise_uA: 0.01 },
+      { currentSpan_uA: 0.05 },
+    );
+    expect(flat.currentFlat).toBe(true);
+    expect(flat.level).toBe("red");
+    expect(computeCVSignalQuality(baseMetrics, { currentSpan_uA: 160 }).currentFlat).toBe(false);
   });
   it("system descriptors never change the light: ΔEp, ratio, reversibility, D", () => {
     const q = computeCVSignalQuality({

@@ -6,9 +6,16 @@ export type CVQualityLevel = "green" | "yellow" | "red" | "idle";
 export interface CVQualityLevels {
   level: CVQualityLevel;
   ready: boolean;
+  /** Always "idle": how many peaks were found does not colour the light, it is reported on its own line. */
   peakLevel: CVQualityLevel;
   snrLevel: CVQualityLevel;
   resolutionLevel: CVQualityLevel;
+  /** Peaks found, 0 to 2, for the neutral "Peaks: 1 of 2 found" line. */
+  peaksFound: number;
+  /** The current stays at about zero over the whole scan: nothing is connected, or the electrode is not in the solution. */
+  currentFlat: boolean;
+  /** The signal-to-noise ratio the light is based on. NaN when it cannot be told. */
+  snr: number;
 }
 
 export interface CVQualityOptions {
@@ -16,7 +23,12 @@ export interface CVQualityOptions {
   stepMv?: number | null;
   /** Electrons transferred; sets the width of the feature being resolved. */
   n?: number;
+  /** Largest minus smallest raw current of the scan, in µA. Lets the light tell a flat trace from a quiet one. */
+  currentSpan_uA?: number | null;
 }
+
+/** The noise below which the estimate is a floor and not a measurement (see computeCVMetrics). */
+const NOISE_FLOOR_UA = 0.05 / 3;
 
 /**
  * Median potential increment along a scan, ignoring the jumps at vertices.
@@ -42,8 +54,14 @@ export function estimateCVStepMv(
  *
  * The light answers "is this a trustworthy measurement?", so it uses the same
  * rule as the other techniques (all green -> green, any red -> red, otherwise
- * yellow) over the criteria that describe the measurement itself: both peaks
- * found, SNR, and scan resolution. A reversible peak pair is ~57/n mV wide, so
+ * yellow) over the criteria that describe the measurement itself: the
+ * signal-to-noise ratio and the scan resolution (the app adds the count of
+ * points outside the ADC window). How many peaks were found does not colour the
+ * light: a dummy cell has none, a real CV of a probe that is not reversible may
+ * show one, and neither is a bad signal. The SNR is that of the best peak found;
+ * with no peak it is the swing of the current over the noise. Only a current
+ * that stays at about zero over the whole scan is reported as a connection
+ * problem. A reversible peak pair is ~57/n mV wide, so
  * the potential step must put enough points across that width to locate Ep
  * (the ΔEp resolution is one step); ≥10 points per 57/n mV is green, ≥5 yellow.
  *
@@ -62,16 +80,27 @@ export function computeCVSignalQuality(
       peakLevel: "idle",
       snrLevel: "idle",
       resolutionLevel: "idle",
+      peaksFound: 0,
+      currentFlat: false,
+      snr: NaN,
     };
   }
   const { hasAnodic, hasCathodic, SNR_anodic, SNR_cathodic } = metrics;
 
   const peaksFound = (hasAnodic ? 1 : 0) + (hasCathodic ? 1 : 0);
-  const peakLevel: CVQualityLevel =
-    peaksFound === 2 ? "green" : peaksFound === 1 ? "yellow" : "red";
-  const snr = Math.min(SNR_anodic, SNR_cathodic);
-  const snrLevel: CVQualityLevel =
-    snr >= 10 ? "green" : snr >= 3 ? "yellow" : "red";
+  const peakLevel: CVQualityLevel = "idle";
+  const noise = Math.max(Number.isFinite(metrics.noise_uA) ? metrics.noise_uA : 0, NOISE_FLOOR_UA);
+  const span = opts.currentSpan_uA;
+  const currentFlat = span != null && Number.isFinite(span) && span < Math.max(0.2, 5 * noise);
+  const snr =
+    peaksFound > 0
+      ? Math.max(hasAnodic ? SNR_anodic : -Infinity, hasCathodic ? SNR_cathodic : -Infinity)
+      : span != null && Number.isFinite(span)
+        ? span / (2 * noise)
+        : Math.max(SNR_anodic, SNR_cathodic);
+  const snrLevel: CVQualityLevel = currentFlat
+    ? "red"
+    : snr >= 10 ? "green" : snr >= 3 ? "yellow" : "red";
 
   let resolutionLevel: CVQualityLevel = "idle";
   if (opts.stepMv != null && opts.stepMv > 0) {
@@ -80,12 +109,12 @@ export function computeCVSignalQuality(
       pointsPerFeature >= 10 ? "green" : pointsPerFeature >= 5 ? "yellow" : "red";
   }
 
-  const levels = [peakLevel, snrLevel, ...(resolutionLevel === "idle" ? [] : [resolutionLevel])];
+  const levels = [snrLevel, ...(resolutionLevel === "idle" ? [] : [resolutionLevel])];
   const level: CVQualityLevel = levels.every((l) => l === "green")
     ? "green"
     : levels.some((l) => l === "red")
       ? "red"
       : "yellow";
 
-  return { level, ready: true, peakLevel, snrLevel, resolutionLevel };
+  return { level, ready: true, peakLevel, snrLevel, resolutionLevel, peaksFound, currentFlat, snr };
 }

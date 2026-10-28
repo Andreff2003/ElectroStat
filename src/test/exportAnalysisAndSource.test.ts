@@ -91,7 +91,7 @@ describe("EIS export: Lin-KK and the Randles fit on the exported sweep", () => {
     // every point is still exported
     const rawRows = text.split("\n").filter((l) => l.startsWith("eis_c;"));
     expect(rawRows).toHaveLength(42);
-    expect(rawRows.filter((l) => l.endsWith(";Yes"))).toHaveLength(6);
+    expect(rawRows.filter((l) => l.split(";")[13] === "Yes")).toHaveLength(6);   // the "Low signal" column
     // and the fit does not see them
     const rct = Number(row(text, "Rct_ohm"));
     expect(rct).toBeGreaterThan(RCT * 0.9);

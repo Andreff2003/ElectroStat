@@ -111,6 +111,8 @@ import {
 } from "@/utils/sessionStore";
 import { logActivity, clearActivityLog } from "@/utils/activityLog";
 import { buildInstrumentSettings } from "@/utils/instrumentSettings";
+import { usableForAnalysis } from "@/utils/eisLowSignal";
+import { cvLegendModel, cvModelE0 } from "@/utils/cvLabels";
 import type { EISDataPoint } from "@/hooks/useSimulatedData";
 import { type DemoPhase, PHASE_ORDER, PHASE_LABEL } from "@/components/helpstat/demoPhases";
 import DashboardHeader from "@/components/helpstat/DashboardHeader";
@@ -475,20 +477,23 @@ const Index = () => {
     // almost always sits at the very first (highest-frequency) point, i.e.
     // Z' ≈ Rs, making the separator look stuck there regardless of what the
     // auto-fit actually found.
+    // The fits and Lin-KK use the sweep without its low-signal and suspect points; the plots and the export keep
+    // them (flagged), see utils/eisLowSignal.ts.
+    const fitData = usableForAnalysis(finalData);
     let defaultSep: number | null = null;
-    let autoSemiCircle: typeof finalData = finalData;
-    if (finalData.length > 0) {
-      const split = splitRegionsAuto(finalData);
-      autoSemiCircle = split.semicircle.length >= 5 ? split.semicircle : finalData;
+    let autoSemiCircle: typeof fitData = fitData;
+    if (fitData.length > 0) {
+      const split = splitRegionsAuto(fitData);
+      autoSemiCircle = split.semicircle.length >= 5 ? split.semicircle : fitData;
       defaultSep = split.separatorZReal;
     }
     setSeparatorZReal(defaultSep);
     setEisFitted(false);
 
     // Automatic Randles CNLS fit (same math as manual CNLS panel).
-    const autoFit = finalData.length >= 5 ? fitRandlesAuto(finalData) : null;
+    const autoFit = fitData.length >= 5 ? fitRandlesAuto(fitData) : null;
     const autoWb  = extractWarburgSlope(
-      defaultSep != null ? finalData.filter(d => d.frequency < autoSemiCircle.reduce(
+      defaultSep != null ? fitData.filter(d => d.frequency < autoSemiCircle.reduce(
         (min, d) => Math.min(min, d.frequency), Infinity)) : [],
     );
     // KK on semicircle region only — Warburg tail causes false KK failures.
@@ -496,7 +501,7 @@ const Index = () => {
     // Lin-KK runs on the FULL spectrum — it is KK-compliant by construction
     // and provides a rigorous data-consistency check independent of the
     // chosen equivalent circuit.
-    const autoLinKK = linKKTest(finalData);
+    const autoLinKK = linKKTest(fitData);
     // Also populate the CNLS Fit panel automatically, using the same
     // auto-detected region and the currently selected circuit model — it
     // used to be left null here, so the detailed fit panel always showed
@@ -504,7 +509,7 @@ const Index = () => {
     // automatic detection look broken. Re-fitting manually still works and
     // simply replaces this result.
     const autoCnls = autoSemiCircle.length >= 4
-      ? fitEIS(fitRegionFor(circuitModel, autoSemiCircle, finalData), circuitModel, finalData)
+      ? fitEIS(fitRegionFor(circuitModel, autoSemiCircle, fitData), circuitModel, fitData)
       : null;
     setRandlesFit(autoFit);
     setWarburg(autoWb);
@@ -517,7 +522,7 @@ const Index = () => {
       toast.warning(autoFit.separatorWarning ?? "Automatic separator uncertain — adjust manually.");
     }
 
-    const params = computeEISParams(finalData);
+    const params = computeEISParams(fitData);
     logActivity(
       "measurement",
       `EIS completed — concentration=${concentration} nM, points=${finalData.length} · auto-fit saved; manual re-fit available`,
@@ -635,7 +640,12 @@ const Index = () => {
   // Run the Randles fit on the user-selected semicircle region.
   const handleFitRandles = () => {
     if (separatorZReal == null) return;
-    const finalData = frozenEis ?? eisData;
+    // The fit uses the sweep without its low-signal and suspect points (see utils/eisLowSignal.ts).
+    const finalData = usableForAnalysis(frozenEis ?? eisData);
+    if (finalData.length < 5) {
+      toast.error(`Only ${finalData.length} usable point(s) in the sweep (low-signal and out-of-line points are left out): a fit needs at least 5.`);
+      return;
+    }
     // Filter by frequency — NOT by zReal.
     // The Warburg tail can fold back to lower zReal values, so zReal-based
     // filtering includes Warburg points in the semicircle region.
@@ -2369,7 +2379,6 @@ const Index = () => {
             channels={channels}
             wsChannels={wsChannels}
             layout={multiChannelLayout}
-            e0Prime={cvParams.formalPotential ?? CV_E0_PRIME}
           />
         </div>
       )}
@@ -2556,7 +2565,7 @@ const Index = () => {
           )}
         </Tabs>
         <div className="space-y-4">
-          <SignalQuality mode="eis" eisData={sqEisData} fetBaseline={sqFetBaseline} fetAnalyte={sqFetAnalyte} cnlsChiSquared={cnlsFit?.chiSquared ?? null} separatorZReal={separatorZReal} separatorFreq={(() => { if (separatorZReal == null || sqEisData.length === 0) return null; const c = sqEisData.reduce((b, d) => Math.abs(d.zReal - separatorZReal) < Math.abs(b.zReal - separatorZReal) ? d : b, sqEisData[0]); return c.frequency; })()} linKKResidualPct={linKK?.residualRmsPct ?? null} linKKPassed={linKK?.passed ?? null} />
+          <SignalQuality mode="eis" eisData={usableForAnalysis(sqEisData)} fetBaseline={sqFetBaseline} fetAnalyte={sqFetAnalyte} cnlsChiSquared={cnlsFit?.chiSquared ?? null} separatorZReal={separatorZReal} separatorFreq={(() => { if (separatorZReal == null || sqEisData.length === 0) return null; const c = sqEisData.reduce((b, d) => Math.abs(d.zReal - separatorZReal) < Math.abs(b.zReal - separatorZReal) ? d : b, sqEisData[0]); return c.frequency; })()} linKKResidualPct={linKK?.residualRmsPct ?? null} linKKPassed={linKK?.passed ?? null} eisComplete={eisStatus === "complete" || eisStatus === "stopped"} />
           <CNLSFitResults fit={cnlsFit} model={circuitModel} randlesFit={randlesFit} warburg={warburg} kk={kk} linKK={linKK} />
           <MeasurementNotesPanel
             mode="eis"
@@ -2698,6 +2707,7 @@ const Index = () => {
             )}
             <div className="rounded-lg border border-border bg-card p-3 h-[300px] md:h-[350px] overflow-visible">
               <FETTransferPlot
+                rtiaOhms={fetParams.rtiaOhms}
                 baseline={fetBaselineData}
                 withAnalyte={fetAnalyteData}
                 overlays={fetOverlayMode ? fetOverlays : []}
@@ -2753,7 +2763,7 @@ const Index = () => {
               </div>
             </div>
             <div className="rounded-lg border border-border bg-card p-3 h-[300px] md:h-[350px]">
-              <FETTimePlot data={fetTimeDataArr} markers={fetMarkers} overlays={fetOverlayMode ? fetTimeOverlays : []} analyteName={fetAnalyteName} />
+              <FETTimePlot data={fetTimeDataArr} markers={fetMarkers} overlays={fetOverlayMode ? fetTimeOverlays : []} analyteName={fetAnalyteName} rtiaOhms={fetParams.rtiaOhms} />
 
             </div>
             {fetMarkers.length > 0 && (
@@ -3015,11 +3025,13 @@ const Index = () => {
                 <CVPlot
                   data={cvDataLive}
                   metrics={cvMetrics}
-                  e0Prime={cvParams.formalPotential ?? CV_E0_PRIME}
+                  // The model E°′ and the model name belong to simulated traces only: a measurement has neither.
+                  e0Prime={cvModelE0(dataSource, cvParams.formalPotential ?? CV_E0_PRIME)}
+                  rtiaOhms={cvParams.rtiaOhms}
                   plotMode={cvPlotMode}
                   overlays={cvOverlayMode ? cvOverlays : []}
                   showBaseline={cvShowBaseline}
-                  liveLabelSuffix={cvParams.cvModel}
+                  liveLabelSuffix={cvLegendModel(dataSource, cvParams.cvModel)}
                 />
               </div>
               {cvMetrics && (
@@ -3216,7 +3228,7 @@ const Index = () => {
               <CVPlot
                 data={cvDataLive}
                 metrics={null}
-                e0Prime={cvParams.formalPotential ?? CV_E0_PRIME}
+                e0Prime={cvModelE0(dataSource, cvParams.formalPotential ?? CV_E0_PRIME)}
                 overlays={[]}
                 compact
               />

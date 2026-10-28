@@ -107,11 +107,14 @@ describe("CV peak detector: noise and a capacitive plateau are not peaks", () =>
     expect(m.warnings.join(" ")).toMatch(new RegExp(`below .* ${PEAK_MIN_WIDTH_MV} mV`));
   });
 
-  it("the verdict is red: both peaks missing, and nothing in the metrics grid to read", () => {
-    const m = computeCVMetrics(trace({ seed: 7, ripple: 3, offset: -2.7 }), INPUT)!;
-    const q = computeCVSignalQuality(m, { stepMv: 2, n: 1 });
-    expect(q.peakLevel).toBe("red");
-    expect(q.level).toBe("red");
+  it("no peaks is reported as 0 of 2 and does not, by itself, make the light red", () => {
+    const data = trace({ seed: 7, ripple: 3, offset: -2.7 });
+    const m = computeCVMetrics(data, INPUT)!;
+    const span = Math.max(...data.map((p) => p.I)) - Math.min(...data.map((p) => p.I));
+    const q = computeCVSignalQuality(m, { stepMv: 2, n: 1, currentSpan_uA: span });
+    expect(q.peaksFound).toBe(0);
+    expect(q.peakLevel).toBe("idle");
+    expect(q.currentFlat).toBe(false);          // there is current: it is a capacitor, not an open circuit
   });
 });
 

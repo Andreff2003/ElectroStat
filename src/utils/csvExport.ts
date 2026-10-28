@@ -27,6 +27,7 @@ import {
 import type { CVMeasurementNotes } from "@/utils/cvMeasurementNotes";
 import type { StoredMeasurement } from "./sessionStore";
 import { linKKTest } from "./linKK";
+import { isFlagged, markSuspectPoints } from "./eisLowSignal";
 import { fitRandlesAuto } from "./randlesFit";
 import { instrumentRows, type InstrumentSettings, type InstrumentTechnique } from "./instrumentSettings";
 import { getActivityLog, type ActivityEntry } from "./activityLog";
@@ -168,11 +169,14 @@ const RAW_EIS_HEADERS = [
   "DFT Mag (counts)",
   "RTIA (Ω)",
   "Low signal",
+  // Set by the app, not by the device: the point breaks the continuity of the sweep (see markSuspectPoints).
+  // Suspect points, like low-signal ones, are left out of the fits and of Lin-KK.
+  "Suspect",
 ];
 
-/** The four diagnostic cells of a raw EIS row, in the order of RAW_EIS_HEADERS. */
+/** The five diagnostic cells of a raw EIS row, in the order of RAW_EIS_HEADERS. The point is one of a marked sweep. */
 function eisDiagnosticCells(p: EISDataPoint): string[] {
-  return [fmtNum(p.dftCal), fmtNum(p.dftMag), fmtNum(p.rtiaOhms), p.lowSignal === true ? "Yes" : "No"];
+  return [fmtNum(p.dftCal), fmtNum(p.dftMag), fmtNum(p.rtiaOhms), p.lowSignal === true ? "Yes" : "No", p.suspect === true ? "Yes" : "No"];
 }
 
 const RAW_FET_TRANSFER_HEADERS = [
@@ -297,7 +301,7 @@ function buildRawSection(measurements: StoredMeasurement[]): string {
     lines.push(toRow(RAW_EIS_HEADERS));
     for (const m of eisList) {
       const ts = fmtTs(m.timestamp);
-      for (const p of m.data) {
+      for (const p of markSuspectPoints(m.data)) {
         lines.push(
           toRow([
             m.id,
@@ -873,7 +877,7 @@ function completeEISAnalysis(
   data: EISDataPoint[],
   meta: ModeExportMetadata & EISExportFitOptions,
 ): { meta: ModeExportMetadata & EISExportFitOptions; block: string } {
-  const usable = data.filter((p) => p.lowSignal !== true);
+  const usable = markSuspectPoints(data).filter((p) => !isFlagged(p));
   const excluded = data.length - usable.length;
   const notes: string[] = [];
   const out = { ...meta };
@@ -911,7 +915,8 @@ function completeEISAnalysis(
     sectionHeader("EIS ANALYSIS INPUT"),
     toRow(["analysis_points_total", `${data.length}`]),
     toRow(["analysis_points_used", `${usable.length}`]),
-    toRow(["analysis_points_excluded_low_signal", `${excluded}`]),
+    toRow(["analysis_points_excluded_low_signal", `${data.filter((p) => p.lowSignal === true).length}`]),
+    toRow(["analysis_points_excluded_suspect", `${excluded - data.filter((p) => p.lowSignal === true).length}`]),
     toRow(["lin_kk_source", linKKSource]),
     toRow(["randles_fit_source", randlesSource]),
     toRow(["analysis_notes", notes.length > 0 ? sanitizeNotesForCSV(notes.join(" | ")) : "N/A"]),
@@ -930,7 +935,7 @@ export function buildEISExportText(
   const id = meta.measurementId ?? `eis_${now}`;
   const ts = fmtTs(meta.measurementTimestamp ?? now);
   const rawLines = [sectionHeader("RAW EIS DATA"), toRow(RAW_EIS_HEADERS)];
-  for (const p of data) {
+  for (const p of markSuspectPoints(data)) {
     rawLines.push(toRow([
       id, NO_CHANNEL, ts, "eis", "N/A",
       fmtNum(p.frequency), fmtNum(p.zReal), fmtNum(p.zImag), fmtNum(p.zMag), fmtNum(p.phase),

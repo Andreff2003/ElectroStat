@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import type { SWVDataPoint, SWVMetrics } from "@/types/swv";
 import { swvCurrentAxis, formatSwvTick } from "@/utils/swvAxis";
+import { OutOfRangeNote, countOutOfRange, outOfRangeDots } from "@/components/OutOfRange";
 
 type ChartMouseEvent = {
   activeLabel?: number | string;
@@ -38,6 +39,8 @@ interface Props {
   overlays?: SWVOverlay[];
   /** Compact read-only rendering for the dashboard grid. */
   compact?: boolean;
+  /** HSTIA RTIA in use, for the note about points outside the ADC window. */
+  rtiaOhms?: number;
 }
 
 const fmt = (v: unknown, unit: string, digits = 3) => {
@@ -61,6 +64,7 @@ export default function SWVPlot({
   plotMode = "raw",
   overlays = [],
   compact = false,
+  rtiaOhms,
 }: Props) {
   const correctedAvailable =
     !!corrected &&
@@ -257,6 +261,13 @@ export default function SWVPlot({
           {showBaseline && (
             <Line type="monotone" dataKey="baseline" name="Baseline" stroke="#9ca3af" dot={false} strokeDasharray="4 4" />
           )}
+          {!compact &&
+            outOfRangeDots(
+              data.map((p, i) => ({ E: p.E, y: rows[i]?.INet ?? p.INet, outOfRange: p.outOfRange })),
+              (q) => q.E,
+              (q) => q.y,
+              "swv_oor",
+            )}
           {metrics?.peakPotential_V != null && metrics.peakCurrentCorrected_uA != null && (
             <ReferenceDot
               x={metrics.peakPotential_V}
@@ -279,6 +290,7 @@ export default function SWVPlot({
         </ComposedChart>
         </ResponsiveContainer>
       </div>
+      {!compact && <OutOfRangeNote count={countOutOfRange(data)} rtiaOhms={rtiaOhms} />}
     </div>
   );
 }

@@ -19,10 +19,9 @@ interface Props {
   channels: Channel[];
   wsChannels: WS[];
   layout: "combined" | "separate";
-  e0Prime: number;
 }
 
-export default function MultiChannelView({ mode, channels, wsChannels, layout, e0Prime }: Props) {
+export default function MultiChannelView({ mode, channels, wsChannels, layout }: Props) {
   const active = channels
     .map((c, i) => ({ c, ws: wsChannels[i] }))
     .filter(({ c }) => c.enabled);
@@ -65,7 +64,6 @@ export default function MultiChannelView({ mode, channels, wsChannels, layout, e
           <CVPlot
             data={overlays ? [] : ws.cvData}
             metrics={null}
-            e0Prime={e0Prime}
             overlays={overlays ? ov.map((o) => ({ id: o.id, label: o.label, color: o.color, data: o.ws.cvData })) : []}
           />
         );

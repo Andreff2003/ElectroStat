@@ -1,3 +1,4 @@
+import { OutOfRangeNote, countOutOfRange, outOfRangeDots } from "@/components/OutOfRange";
 import { EmptyPlotState } from "@/components/EmptyPlotState";
 import { useState } from "react";
 import {
@@ -22,9 +23,11 @@ interface FETTransferPlotProps {
   compact?: boolean;
   /** Display label for the analyte curve — e.g. "Cortisol". Never affects data. */
   analyteName?: string;
+  /** HSTIA RTIA in use, for the note about points outside the ADC window. */
+  rtiaOhms?: number;
 }
 
-const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], compact = false, analyteName = "Analyte" }: FETTransferPlotProps) => {
+const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], compact = false, analyteName = "Analyte", rtiaOhms }: FETTransferPlotProps) => {
   const overlays = compact ? [] : overlaysProp;
   const plotData = baseline.map((b, i) => ({
     vg: b.vg,
@@ -74,7 +77,7 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
   }
 
   return (
-    <div className="w-full h-full" style={{ position: "relative" }}>
+    <div className="w-full h-full flex flex-col" style={{ position: "relative" }}>
       {!compact && zoomDomain && (
         <button
           onClick={() => setZoomDomain(null)}
@@ -90,6 +93,7 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
           Reset Zoom
         </button>
       )}
+      <div className="flex-1 min-h-0">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={plotData}
@@ -175,11 +179,15 @@ const FETTransferPlot = ({ baseline, withAnalyte, overlays: overlaysProp = [], c
           <Line type="monotone" dataKey="baseline" name="Baseline (no analyte)" stroke="hsl(200 80% 55%)" strokeWidth={2} dot={false} isAnimationActive={false} />
           <Line type="monotone" dataKey="analyte" name={`With ${analyteName}`} stroke="hsl(35 90% 55%)" strokeWidth={2} dot={false} strokeDasharray="6 3" isAnimationActive={false} />
 
+          {!compact && outOfRangeDots(baseline, (p) => p.vg, (p) => p.id, "fet_oor_b")}
+          {!compact && outOfRangeDots(withAnalyte, (p) => p.vg, (p) => p.id, "fet_oor_a")}
           {!compact && isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
             <ReferenceArea x1={zoomArea.x1} x2={zoomArea.x2} strokeOpacity={0.3} fill="hsl(200 80% 55%)" fillOpacity={0.15} />
           )}
         </LineChart>
       </ResponsiveContainer>
+      </div>
+      {!compact && <OutOfRangeNote count={countOutOfRange(baseline) + countOutOfRange(withAnalyte)} rtiaOhms={rtiaOhms} />}
     </div>
   );
 };

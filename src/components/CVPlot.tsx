@@ -8,13 +8,13 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
   ReferenceLine,
   ReferenceArea,
   ReferenceDot,
 } from "recharts";
 import type { CVDataPoint } from "@/hooks/useSimulatedCVData";
 import type { CVMetrics } from "@/utils/computeCVMetrics";
+import { OutOfRangeNote, countOutOfRange, outOfRangeDots } from "@/components/OutOfRange";
 
 // Live-cycle colors. Deliberately distinct hues from OVERLAY_COLORS so a
 // live cycle can never share a color with a captured overlay.
@@ -32,7 +32,13 @@ const PALETTE = [
 interface CVPlotProps {
   data: CVDataPoint[];
   metrics: CVMetrics | null;
-  e0Prime: number;
+  /**
+   * The formal potential of the CV model, drawn as a dashed vertical line. Only meaningful for simulated data:
+   * leave it out for a measurement, which has no model E°′.
+   */
+  e0Prime?: number | null;
+  /** HSTIA RTIA in use, for the note about points outside the ADC window. */
+  rtiaOhms?: number;
   /**
    * "positive-right" (default) puts positive E on the right axis.
    * "positive-left" matches the classic electrochemistry convention.
@@ -48,7 +54,10 @@ interface CVPlotProps {
   overlays?: { id: string; label: string; color: string; data: CVDataPoint[] }[];
   /** Overlay baseline trace (raw mode) or zero reference (corrected mode). */
   showBaseline?: boolean;
-  /** Appended to live-trace legend entries, e.g. the CV model, so they can't be confused with same-concentration overlays. */
+  /**
+   * Appended to the legend entries of the live trace, e.g. the CV model, so they cannot be confused with
+   * same-concentration overlays. Give it for simulated traces only: a measurement has no model.
+   */
   liveLabelSuffix?: string;
   /** Compact read-only rendering for the dashboard grid. */
   compact?: boolean;
@@ -65,6 +74,7 @@ const CVPlot = ({
   data,
   metrics,
   e0Prime,
+  rtiaOhms,
   axisConvention = "positive-right",
   plotMode = "raw",
   overlays = [],
@@ -138,6 +148,18 @@ const CVPlot = ({
     }
     return { rows: rowsLocal, seriesKeys: keys };
   }, [data, overlays, corrIndex, showBaseline, effectiveMode, baselineAvailable, metrics]);
+
+  const seriesName = (k: string): string => {
+    if (k === "__baseline") return "Baseline";
+    if (k.startsWith("ov_")) {
+      const ov = overlays.find((o) => `ov_${o.id}` === k);
+      return ov?.label ?? k;
+    }
+    const live = k.replace(/^c(\d+)_/, "Cycle $1 · ");
+    return liveLabelSuffix ? `${live} · ${liveLabelSuffix}` : live;
+  };
+
+  const outOfRangeCount = useMemo(() => countOutOfRange(data), [data]);
 
   const colorOf = (key: string): string => {
     if (key === "__baseline") return "hsl(220 10% 60%)";
@@ -321,17 +343,19 @@ const CVPlot = ({
               ]}
               labelFormatter={(v: number) => `E = ${Number(v).toFixed(3)} V`}
             />
-            <ReferenceLine
-              x={e0Prime}
-              stroke="hsl(50 90% 55%)"
-              strokeDasharray="4 3"
-              label={compact ? undefined : {
-                value: "E°'",
-                position: "top",
-                fill: "hsl(50 90% 55%)",
-                fontSize: 11,
-              }}
-            />
+            {e0Prime != null && Number.isFinite(e0Prime) && (
+              <ReferenceLine
+                x={e0Prime}
+                stroke="hsl(50 90% 55%)"
+                strokeDasharray="4 3"
+                label={compact ? undefined : {
+                  value: "model E°′",
+                  position: "insideTopRight",
+                  fill: "hsl(50 90% 55%)",
+                  fontSize: 11,
+                }}
+              />
+            )}
             {seriesKeys.map((k) => (
               <Line
                 key={k}
@@ -342,15 +366,7 @@ const CVPlot = ({
                 strokeDasharray={k === "__baseline" ? "3 3" : undefined}
                 dot={false}
                 isAnimationActive={false}
-                name={(() => {
-                  if (k === "__baseline") return "Baseline";
-                  if (k.startsWith("ov_")) {
-                    const ov = overlays.find((o) => `ov_${o.id}` === k);
-                    return ov?.label ?? k;
-                  }
-                  const live = k.replace(/^c(\d+)_/, "Cycle $1 · ");
-                  return liveLabelSuffix ? `${live} · ${liveLabelSuffix}` : live;
-                })()}
+                name={seriesName(k)}
                 connectNulls={false}
               />
             ))}
@@ -397,9 +413,17 @@ const CVPlot = ({
                 }}
               />
             )}
-            {!compact && seriesKeys.length > 1 && (
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: "monospace" }} />
-            )}
+            {!compact &&
+              outOfRangeDots(
+                data.map((p, i) => ({
+                  E: p.E,
+                  y: effectiveMode === "corrected" && corrIndex.has(i) ? (corrIndex.get(i) as number) : p.I,
+                  outOfRange: p.outOfRange,
+                })),
+                (q) => q.E,
+                (q) => q.y,
+                "cv_oor",
+              )}
             {!compact && isSelecting && zoomArea && zoomArea.x1 !== zoomArea.x2 && (
               <ReferenceArea
                 x1={Math.min(zoomArea.x1, zoomArea.x2)}
@@ -412,6 +436,25 @@ const CVPlot = ({
           </LineChart>
         </ResponsiveContainer>
       </div>
+      {/* The legend lives under the chart, not inside it: it wraps onto several lines with two or more cycles
+          and must never cover the title of the x axis. */}
+      {!compact && seriesKeys.length > 1 && (
+        <ul
+          data-testid="cv-legend"
+          className="flex flex-wrap justify-center gap-x-4 gap-y-1 px-2 pt-1 text-[11px] font-mono text-muted-foreground"
+        >
+          {seriesKeys.map((k) => (
+            <li key={k} className="flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                style={{ display: "inline-block", width: 14, height: 0, borderTop: `2px ${k === "__baseline" ? "dashed" : "solid"} ${colorOf(k)}` }}
+              />
+              <span style={{ color: colorOf(k) }}>{seriesName(k)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!compact && <OutOfRangeNote count={outOfRangeCount} rtiaOhms={rtiaOhms} />}
     </div>
   );
 };
