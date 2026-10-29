@@ -14,8 +14,9 @@ import { parseImportedCsv } from "@/utils/csvImport";
 import type { SWVParameters } from "@/types/swv";
 
 /**
- * Every CSV the app writes starts with a UTF-8 byte order mark and then "sep=;", so that Excel reads the file as
- * UTF-8 (Ω, °, µ and — instead of mojibake) and splits the columns on ";" whatever the regional list separator is.
+ * Every CSV the app writes starts with a UTF-8 byte order mark and then the content itself, so that Excel reads the
+ * file as UTF-8 (Ω, °, µ and — instead of Î©, Â°, â€”). There is no "sep=;" line: with it first, Excel ignores the
+ * BOM and reads the file as Windows-1252 (checked in Excel 365, pt-PT). The import still accepts files that have one.
  */
 
 let blobs: { parts: BlobPart[]; type: string }[] = [];
@@ -53,7 +54,7 @@ const swvParams: SWVParameters = {
 const cvParams = { scanRate: 100, eStart: 0.6, eVertex1: -0.2, eVertex2: 0.6, nCycles: 1, n: 1, cMM: 5, areaCm2: 0.0707, cvModel: "reversible" };
 const eis = [{ zReal: 100, zImag: -50, frequency: 1000, zMag: 111.8, phase: -26.6 }];
 
-describe("every CSV export starts with a BOM and sep=;", () => {
+describe("every CSV export starts with a BOM and no sep= line", () => {
   const paths: [string, () => void][] = [
     ["EIS", () => exportEISData(eis, "live", {})],
     ["BioFET transfer", () => exportFETTransferData([{ vg: 0, id: 1 }], [{ vg: 0, id: 2 }], "live", {})],
@@ -71,12 +72,13 @@ describe("every CSV export starts with a BOM and sep=;", () => {
       run();
       expect(blobs).toHaveLength(1);
       const t = text()[0];
-      expect(t.startsWith("﻿sep=;\n")).toBe(true);            // the BOM, then sep=;, then the file
+      expect(t.startsWith("﻿")).toBe(true);                    // the BOM first
+      expect(t).not.toMatch(/^﻿?sep=/i);                       // and no sep= line, which makes Excel ignore it
       expect(blobs[0].type).toContain("charset=utf-8");
       expect(names[0]).toMatch(/\.csv$/);
-      // one BOM only, and the header line follows the hint
+      // one BOM only, and the file itself follows it
       expect(t.indexOf("﻿", 1)).toBe(-1);
-      expect(t.split("\n")[1]).toMatch(/^ElectroStat Export;|^=== /);
+      expect(t.split("\n")[0].slice(1)).toMatch(/^ElectroStat Export;|^=== /);
     });
   }
 

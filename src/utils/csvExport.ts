@@ -44,7 +44,6 @@ function notesCell(n: MeasurementNotes | string | undefined | null): string {
 
 const DELIM = ";";
 const BOM = "\uFEFF";
-const EXCEL_SEP_HINT = `sep=${DELIM}\n`;
 const SECTION_PAD = 8; // empty columns after section header
 
 /**
@@ -98,10 +97,10 @@ function toRow(cells: (string | number)[]): string {
 }
 
 function downloadTSV(filename: string, content: string) {
-  // Prepend Excel "sep=;" hint so European Excel installs split columns correctly
-  // without depending on the user's regional list separator. Decimals stay as `.`.
-  const body = EXCEL_SEP_HINT + content;
-  const blob = new Blob([BOM + body], { type: "text/csv;charset=utf-8;" });
+  // UTF-8 BOM so Excel reads Ω, ° and — correctly. No "sep=;" line before the content: Excel then ignores the BOM
+  // and reads the file as Windows-1252 (Î©, Â°, â€”). The columns split on ";" where that is the regional list
+  // separator (Portugal and most of Europe). Decimals stay as `.`.
+  const blob = new Blob([BOM + content], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
